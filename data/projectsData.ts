@@ -7,19 +7,21 @@ interface Project {
 
 const projectsData: Project[] = [
   {
-    title: 'A Search Engine',
-    description: `What if you could look up any information in the world? Webpages, images, videos
-    and more. Google has many features to help you find exactly what you're looking
-    for.`,
-    imgSrc: '/static/images/google.png',
+    title: 'A Quotes[In Progress]',
+    description: `Reading a beautiful Quotes of begaining, with good emotion everyday.`,
+    // imgSrc: '/static/images/google.png',
     href: 'https://www.google.com',
   },
   {
-    title: 'The Time Machine',
-    description: `Imagine being able to travel back in time or to the future. Simple turn the knob
-    to the desired date and press "Go". No more worrying about lost keys or
-    forgotten headphones with this simple yet affordable solution.`,
-    imgSrc: '/static/images/time-machine.jpg',
+    title: 'KMM Showcases[In Progress]',
+    description: `A series of KMM study stories`,
+    // imgSrc: '/static/images/time-machine.jpg',
+    href: '/blog/the-time-machine',
+  },
+  {
+    title: 'Big billboard[In Progress]',
+    description: `A billboard about daily/weekly/monthly/annual ranking`,
+    imgSrc: '/static/images/github-traffic.png',
     href: '/blog/the-time-machine',
   },
 ]
