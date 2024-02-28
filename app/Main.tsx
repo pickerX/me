@@ -32,8 +32,12 @@ export default function Home({ posts }) {
                       <dd className="text-base font-medium leading-6 text-gray-500 dark:text-gray-400">
                         <time dateTime={date}>{formatDate(date, siteMetadata.locale)}</time>
                       </dd>
-                      {(images && images.length > 0) &&
-                        <Image className='mt-4' src={images[0]} alt="First picture of the article" width={200} height={240} />}
+                      {images?.length > 0 && (
+                        <Image className="mt-4"
+                          src={`${images[0]}`}
+                          alt="First picture of the article"
+                          width={200} height={240}
+                        />)}
                     </dl>
                     <div className="space-y-5 xl:col-span-3">
                       <div className="space-y-6">
