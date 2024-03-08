@@ -28,6 +28,7 @@ export default function Footer() {
             Tailwind Nextjs Theme
           </Link>
         </div>
+        {/* <a href="https://www.flaticon.com/free-icons/letter-p" title="letter p icons">Letter p icons created by popo2021 - Flaticon</a> */}
       </div>
     </footer>
   )
