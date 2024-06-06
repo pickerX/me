@@ -1,0 +1,66 @@
+---
+title: AOSP download
+date: '2024-06-06'
+tags: ['android']
+draft: false
+summary: Guide of How to get the source code of android.
+---
+
+No bullshit, let's get the AOSP
+
+Entire AOSP project code is incredibly huge!! if you just want to check the detail of some files,
+
+1. https://cs.android.com 
+2. https://github.com/aosp-mirror 
+
+
+## Partial code
+if you want to get the partial code of framework or else, try this,
+
+``` shell
+mkdir WORKING_DIRECTORY
+cd WORKING_DIRECTORY
+git clone https://aosp.tuna.tsinghua.edu.cn/platform/manifest
+
+cd manifest
+```
+now, you get the manifest of AOSP.  use `git tag` to show all the versions of AOSP you can download. then, 
+
+checkout the version tag, find the exact project director by `cat default.xml`
+
+``` shell
+git checkout android-15-dp-2-gpl
+git clone --depth 1 https://aosp.tuna.tsinghua.edu.cn/platform/packages/apps/Launcher3
+```
+
+`--depth 1` : only allow fetch the latest commit for minimize the project size and save the download time
+
+fromworks code for example,
+
+``` shell
+git clone --depth 1 https://aosp.tuna.tsinghua.edu.cn/platform/frameworks/libs/systemui.git
+```
+
+## Google repo
+
+Goole use the repo tool to download AOSP, but some detail not mentioned in [official doc](https://source.android.com/docs/setup/download)
+
+first, clone the repo, `git clone https://gerrit.googlesource.com/git-repo`
+then, we need Python3 env, believe you guys has installed. Maybe, you also need openssl in addition.
+
+```shell
+git clone https://gerrit.googlesource.com/git-repo
+brew install openssl@1.1
+```
+
+add the `git-repo` to PATH, most important of all, prepare 200G storage space at least and a good network,
+then, init repo & sync
+
+``` shell
+repo init -b main -u https://android.googlesource.com/platform/manifest
+repo sync  -c -j4
+```
+-c :instructs Repo to fetch the current manifest branch from the server.  
+-j4: splits the sync across threads for faster completion.
+
+last, wait and wait...

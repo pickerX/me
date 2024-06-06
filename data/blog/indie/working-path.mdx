@@ -1,0 +1,56 @@
+---
+title: 'Working PATH'
+date: '2024-06-06'
+tags: ['PATH', 'Shell']
+draft: false
+summary: 'Personal working PATH env.'
+---
+
+
+``` shell
+export ZSH="$HOME/.oh-my-zsh"
+ZSH_THEME="robbyrussell"
+# Would you like to use another custom folder than $ZSH/custom?
+# ZSH_CUSTOM=/path/to/new-custom-folder
+plugins=(git)
+
+source $ZSH/oh-my-zsh.sh
+PKS=/Volumes/pks/
+ME=/Users/xxx
+# Andorid
+GRADLE_HOME=$PKS/repo/gradle/gradle-7.6.1
+ANDROID_HOME=$ME/Library/Android/sdk
+ANDROID_EMULATOR=$ANDROID_HOME/emulator
+ANDROID_TOOLS=$ANDROID_HOME/tools
+ANDROID_TOOLS_BIN=$ANDROID_HOME/tools/bin
+ANDROID_PLATFORM=$ANDROID_HOME/platform-tools
+#JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-11.jdk/Contents/Home
+JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home
+NDK=$ME/Library/Android/sdk/ndk/25.2.9519653
+
+FLUTTER_SDK=$PKS/repo/flutter
+TOOLS=$PKS/repo/tools
+PYTHONPATH=$ME/.pyenv/versions/3.10.13/
+
+export PATH=$PKS:$PYTHONPATH/bin:$TOOLS:$TOOLS/dex2jar/:$JAVA_HOME/bin:$GRADLE_HOME/bin:$FLUTTER_SDK/bin:$ANDROID_HOME:$NDK:$NDK/toolchains:$ANDROID_TOOLS:$ANDROID_TOOLS_BIN:$ANDROID_PLATFORM:/Volumes/pks/github/git-repo/:$PATH
+
+#export REPO_URL=https%3A//mirrors.tuna.tsinghua.edu.cn/git/git-repo
+
+export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+function openProxy() {
+   export https_proxy=http://127.0.0.1:7890
+   export http_proxy=http://127.0.0.1:7890
+   export all_proxy=socks5://127.0.0.1:7890
+   echo -e "free on termial"
+}
+
+function closeProxy() {
+   unset https_proxy
+   unset http_proxy
+   unset all_proxy
+   echo -e "proxy closed"
+}
+```
