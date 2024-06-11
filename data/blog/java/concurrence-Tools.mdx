@@ -341,7 +341,7 @@ Phaser可以代替CountDownLatch来构建一个服务于多个对象只执行一
         }
     }
 ```
-最好的{TASKS_PER_PHASER}依赖于期待的同步速率。很小的数字比如4适合于执行非常小的任务（所以速率高），或者成百上千适合于使用大任务。
+最好的 TASKS_PER_PHASER 依赖于期待的同步速率。很小的数字比如4适合于执行非常小的任务（所以速率高），或者成百上千适合于使用大任务。
 注意：我们的这个实现将参与者的上限定为65535.尝试注册更多的参与者会导致IllegalStateException异常。当然，你可以通过使用分层Phaser的方法去满足任意数量的参与者。
 
 #### [Exchanger](https://developer.android.google.cn/reference/java/util/concurrent/Exchanger)
