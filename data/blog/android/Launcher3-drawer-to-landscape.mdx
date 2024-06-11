@@ -1,0 +1,263 @@
+---
+title: Launcher3抽屉型桌面改造成横屏桌面
+date: 2019-01-02 20:00:18
+tags: ['Android','Launcher']
+---
+Google Launcher3默认是抽屉型的桌面，到Android 8.0依然是没有这样的功能。这样的功能是手机厂商提供给我们的，不得不说，横向排列的桌面
+更适合国人的使用习惯，可能是使用iphone的习惯吧。
+
+好，那我们如何实现这样功能呢?其实并不会太难的。
+
+在Launcher加载流程里，我们知道桌面的数据是在LauncherModel的 LoaderTask完成加载的
+
+我们在loadAndBindAllApps()方法调用之后添加一个verifyApplications()方法调用，为什么在这里调用呢？
+因为只用当应用数据加载完全后，我们才能讲所有的应用进行横向绑定到Workspace的操作
+```
+    @Override
+    public void run() {
+        AppTypeHelper.configSystemAppIcon(mContext);
+
+        synchronized (mLock) {
+            if (mStopped) {
+                return;
+            }
+            mIsLoaderTaskRunning = true;
+        }
+        // Optimize for end-user experience: if the Launcher is up and // running with the
+        // All Apps interface in the foreground, load All Apps first. Otherwise, load the
+        // workspace first (default).
+        keep_running:
+        {
+            if (DEBUG_LOADERS) {
+                Log.d(TAG, "step 1: loading workspace");
+            }
+            loadAndBindWorkspace();
+
+            if (mStopped) {
+                break keep_running;
+            }
+
+            waitForIdle();
+
+            // second step
+            if (DEBUG_LOADERS) {
+                Log.d(TAG, "step 2: loading all apps");
+            }
+            loadAndBindAllApps();
+        }
+
+        if (LauncherAppState.getInstance().getInvariantDeviceProfile()
+                .isDisableAllApps) {
+            verifyApplications();
+        }
+        // Clear out this reference, otherwise we end up holding it until all of the
+        // callback runnables are done.
+        mContext = null;
+
+        synchronized (mLock) {
+            // If we are still the last one to be scheduled, remove ourselves.
+            if (mLoaderTask == this) {
+                mLoaderTask = null;
+            }
+            mIsLoaderTaskRunning = false;
+            mHasLoaderCompletedOnce = true;
+        }
+    }
+```
+
+这里呢，我简单的添加了一个布尔值 LauncherAppState.getInstance().getInvariantDeviceProfile().isDisableAllApps 表示是否启用横屏桌面，小伙伴开发的时候建议做成开关的方式，以满足不同的产品需求。
+
+verifyApplications方法里怎么实现呢？来看
+```
+    private void verifyApplications() {
+        final Context context = mApp.getContext();
+
+        // Cross reference all the applications in our apps list with items in the workspace
+        ArrayList<ItemInfo> tmpInfos;
+        ArrayList<ItemInfo> added = new ArrayList<ItemInfo>();
+        synchronized (sBgLock) {
+            for (AppInfo app : mBgAllAppsList.data) {
+                tmpInfos = getItemInfoForComponentName(app.componentName, app.user);
+                if (tmpInfos.isEmpty()) {
+                    // ignore the apps
+                    if (mIgnoreAppsList.contain(app.componentName.getPackageName())) {
+                        continue;
+                    }
+                    // We are missing an application icon, so add this to the workspace
+                    added.add(app);
+                    // This is a rare event, so lets log it
+                    // Log.e(TAG, "Missing Application on load: " + app);
+                }
+            }
+        }
+        if (!added.isEmpty()) {
+            addAndBindAddedWorkspaceItems(context, added);
+        }
+    }
+```
+
+如果小伙伴有用心看加载流程的细节的话，在loadAndBindAllApps()方法里，会把获取到的所有应用信息保存到 AllAppsList这个类里，也就是 mBgAllAppsList.data 里面，故
+我们遍历data数据，将需要绑定的数据绑定到Workspace上就可以了。这里还有一个方法 getItemInfoForComponentName ，作用是 mBgAllAppsList.data的数据跟sBgItemsIdMap里
+的数据做匹配，避免因为线程的关系将不必要的数据添加到桌面
+
+拿到数据的备份added集合后，我们使用LauncherModel里的 addAndBindAddedWorkspaceItems 方法添加item
+```
+    public void addAndBindAddedWorkspaceItems(final Context context,
+                                              final ArrayList<? extends ItemInfo> workspaceApps) {
+        final Callbacks callbacks = getCallback();
+        if (workspaceApps.isEmpty()) {
+            return;
+        }
+        // Process the newly added applications and add them to the database first
+        Runnable r = new Runnable() {
+            @Override
+            public void run() {
+                final ArrayList<ItemInfo> addedShortcutsFinal = new ArrayList<ItemInfo>();
+                final ArrayList<Long> addedWorkspaceScreensFinal = new ArrayList<Long>();
+
+                // Get the list of workspace screens.  We need to append to this list and
+                // can not use sBgWorkspaceScreens because loadWorkspace() may not have been
+                // called.
+                ArrayList<Long> workspaceScreens = loadWorkspaceScreensDb(context);
+                synchronized (sBgLock) {
+                    for (ItemInfo item : workspaceApps) {
+
+                        if (item instanceof ShortcutInfo) {
+                            // Short-circuit this logic if the icon exists somewhere on the workspace
+                            if (shortcutExists(context, item.getIntent(), item.user)) {
+                                continue;
+                            }
+                        }
+                        // Find appropriate space for the item.
+                        Pair<Long, int[]> coords = findSpaceForItem(context,
+                                workspaceScreens, addedWorkspaceScreensFinal,
+                                1, 1);
+                        long screenId = coords.first;
+                        int[] cordinates = coords.second;
+
+                        ItemInfo itemInfo;
+                        if (item instanceof ShortcutInfo || item instanceof FolderInfo) {
+                            itemInfo = item;
+                        } else if (item instanceof AppInfo) {
+                            itemInfo = ((AppInfo) item).makeShortcut();
+                        } else {
+                            throw new RuntimeException("Unexpected info type");
+                        }
+
+                        // Add the shortcut to the db
+                        addItemToDatabase(context, itemInfo,
+                                LauncherSettings.Favorites.CONTAINER_DESKTOP,
+                                screenId, cordinates[0], cordinates[1]);
+                        // Save the ShortcutInfo for binding in the workspace
+                        addedShortcutsFinal.add(itemInfo);
+                    }
+                }
+
+                // Update the workspace screens
+                updateWorkspaceScreenOrder(context, workspaceScreens);
+
+                if (!addedShortcutsFinal.isEmpty()) {
+                    runOnMainThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Callbacks cb = getCallback();
+                            if (callbacks == cb && cb != null) {
+                                final ArrayList<ItemInfo> addAnimated = new ArrayList<ItemInfo>();
+                                final ArrayList<ItemInfo> addNotAnimated = new ArrayList<ItemInfo>();
+                                if (!addedShortcutsFinal.isEmpty()) {
+                                    ItemInfo info = addedShortcutsFinal.get(addedShortcutsFinal.size() - 1);
+                                    long lastScreenId = info.screenId;
+                                    for (ItemInfo i : addedShortcutsFinal) {
+                                        if (i.screenId == lastScreenId) {
+                                            addAnimated.add(i);
+                                        } else {
+                                            addNotAnimated.add(i);
+                                        }
+                                    }
+                                }
+                                callbacks.bindAppsAdded(addedWorkspaceScreensFinal,
+                                        addNotAnimated, addAnimated, null);
+                            }
+                        }
+                    });
+                }
+            }
+        };
+        runOnWorkerThread(r);
+    }
+```
+
+这里就跟加载流程里的绑定worksspace的Screen类似了。简单的介绍一下细节，
+1. 从数据库拿到ScreenId信息 workspaceScreens，遍历需要添加的item信息  
+2. 通过findSpaceForItem 方法在workspace上找到空余的位置，如果没有位置会新创建一个Screen出来。  
+3. 根据ItemInfo的类型创建ShortcutInfo，将ShortcutInfo，screen order信息更新到数据库
+4. 拿到Launcher 这个callbacks调用 bindAppsAdded，开始绑定到workspace
+```
+    @Override
+    public void bindAppsAdded(final ArrayList<Long> newScreens,
+                              final ArrayList<ItemInfo> addNotAnimated,
+                              final ArrayList<ItemInfo> addAnimated,
+                              final ArrayList<AppInfo> addedApps) {
+        Log.e(TAG, "bindAppsAdded");
+        Runnable r = new Runnable() {
+            @Override
+            public void run() {
+                bindAppsAdded(newScreens, addNotAnimated, addAnimated, addedApps);
+            }
+        };
+        if (waitUntilResume(r)) {
+            return;
+        }
+
+        // Add the new screens
+        if (newScreens != null) {
+            bindAddScreens(newScreens);
+        }
+
+        // We add the items without animation on non-visible pages, and with
+        // animations on the new page (which we will try and snap to).
+        if (addNotAnimated != null && !addNotAnimated.isEmpty()) {
+            bindItems(addNotAnimated, 0,
+                    addNotAnimated.size(), false);
+        }
+        if (addAnimated != null && !addAnimated.isEmpty()) {
+            bindItems(addAnimated, 0,
+                    addAnimated.size(), true);
+        }
+
+        // Remove the extra empty screen
+        mWorkspace.removeExtraEmptyScreen(false, false);
+
+        if (addedApps != null && mAppsView != null) {
+            mAppsView.addApps(addedApps);
+        }
+    }
+```
+
+可以发现，会先使用新生成的ScreenId创建screen，之后才开始bindItems， 如果继续往bindItems里看你就会发现，会在WorkSpace里调用addInScreenFromBind，完成图标的创建。
+
+这里有个地方值得我们提一下，就是 waitUntilResume 方法的使用，在很多地方都会使用这个方法。 作用是在Launcher onResume的时候再执行我们的Runnable。通常，类似的操作
+我们会直接在onResume调用或实现，如果操作一多，onResume里就会很臃肿，不好维护
+```
+    @Thunk
+    boolean waitUntilResume(Runnable run, boolean deletePreviousRunnables) {
+        if (mPaused) {
+            if (LOGD) {
+                Log.d(TAG, "Deferring update until onResume");
+            }
+            if (deletePreviousRunnables) {
+                while (mBindOnResumeCallbacks.remove(run)) {
+                }
+            }
+            mBindOnResumeCallbacks.add(run);
+            return true;
+        } else {
+            return false;
+        }
+    }
+```
+这里使用的是一个状态的机制，在mPaused的状态，把需要执行的runnable添加到mBindOnResumeCallbacks，在onResume的时候在遍历出来执行即可.  
+这样就能将抽屉型的Launcher改造成横向的Launcher了，当然改完之后可能会有一些bug，比如桌面里的应用都是 ShortcutInfo类型的，在拖拽时没有查看信息的功能等等
+就需要小伙伴自己修改啦
+
+感谢阅读～

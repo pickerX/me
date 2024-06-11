@@ -1,0 +1,888 @@
+---
+title: Glide源码研究
+date: 2019-09-05 10:32:42
+tags: ['Android']
+---
+本文专注 Glide 核心的代码做研究与学习，网上的相关文章大多比较旧，Glide 代码已经做了改动和优化升级，很有参考学习的必要，故做了该篇内容，也便于面试时有所帮助。
+
+__注意：本文代码基于 Glide v4.8.0版本__
+## Glide 图片加载流程
+Glide 的通常用法
+```
+    Glide.with(this)
+        .load(url)
+        .into(target)
+```
+with 方法返回一个 RequestManager，是由 RequestManagerFactory 的实现类创建的
+```
+    public static RequestManager with(@NonNull FragmentActivity activity) {
+        return getRetriever(activity).get(activity);
+    }
+```
+具体创建在,   
+```
+    private static final RequestManagerFactory DEFAULT_FACTORY = new RequestManagerFactory() {
+        @Override
+        public RequestManager build(@NonNull Glide glide, @NonNull Lifecycle lifecycle,
+            @NonNull RequestManagerTreeNode requestManagerTreeNode, @NonNull Context context) {
+        return new RequestManager(glide, lifecycle, requestManagerTreeNode, context);
+        }
+    };
+```
+拿到 RequestManager 后，就可以调用 load 一个图片，io文件流或者图片地址等等，比如加载网络图片
+```
+    public RequestBuilder<Drawable> load(@Nullable String string) {
+        return asDrawable().load(string);
+    }
+```
+asDrawable() 创建并返回一个 RequestBuilder 对象，用于构造请求，load方法
+```
+    public RequestBuilder<TranscodeType> load(@Nullable String string) {
+      return loadGeneric(string);
+    }
+
+    private RequestBuilder<TranscodeType> loadGeneric(@Nullable Object model) {
+        // 保存 model 信息，这里是 图片 url 地址
+        this.model = model;
+        isModelSet = true;
+        return this;
+    }
+```
+最后的在调用 RequestBuilder 的 into 方法
+```
+    private <Y extends Target<TranscodeType>> Y into(
+      @NonNull Y target,
+      @Nullable RequestListener<TranscodeType> targetListener,
+      @NonNull RequestOptions options) {
+        Util.assertMainThread();
+        // 判断 target 是否为 null
+        Preconditions.checkNotNull(target);
+        // isModelSet false 时中断加载
+        if (!isModelSet) {
+            throw new IllegalArgumentException("You must call #load() before calling #into()");
+        }
+
+        options = options.autoClone();
+        // build 一个实际的 Request 请求对象
+        Request request = buildRequest(target, targetListener, options);
+
+        Request previous = target.getRequest();
+        if (request.isEquivalentTo(previous)
+            && !isSkipMemoryCacheWithCompletePreviousRequest(options, previous)) {
+            // 如果请求与上一次相同，
+            // 1. 上一次请求还未完成，忽略当前重复请求      
+            // 2. 上一次请求已完成，并且 MemoryCacheable 是 true，则会加载上一次已请求的缓存数据
+            request.recycle();
+            if (!Preconditions.checkNotNull(previous).isRunning()) {
+            // 使用之前的请求，避免重新初始化
+            previous.begin();
+            }
+            return target;
+        }
+        // 清除旧数据
+        requestManager.clear(target);
+        // 重新设置 request
+        target.setRequest(request);
+        // track 方法开始执行加载任务
+        requestManager.track(target, request);
+
+        return target;
+    }
+```
+track 方法如下
+```
+    void track(@NonNull Target<?> target, @NonNull Request request) {
+      targetTracker.track(target);
+      // 执行请求
+      requestTracker.runRequest(request);
+    }
+    
+    private final Set<Request> requests =
+      Collections.newSetFromMap(new WeakHashMap<Request, Boolean>());
+
+    public void runRequest(@NonNull Request request) {
+        requests.add(request);
+        if (!isPaused) {
+            // begin 开始执行任务
+            request.begin();
+        } else {
+            request.clear();
+            if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                Log.v(TAG, "Paused, delaying request");
+            }
+            pendingRequests.add(request);
+        }
+    }
+```
+因此，这个 request 就是任务的载体了， 通过上面，我们知道 request 是 into 方法里调用 buildRequest 创建出来的。那具体是在，
+```
+    private Request buildRequestRecursive(
+        Target<TranscodeType> target,
+        @Nullable RequestListener<TranscodeType> targetListener,
+        @Nullable RequestCoordinator parentCoordinator,
+        TransitionOptions<?, ? super TranscodeType> transitionOptions,
+        Priority priority,
+        int overrideWidth,
+        int overrideHeight,
+        RequestOptions requestOptions) {
+
+        // Build the ErrorRequestCoordinator first if necessary so we can update parentCoordinator.
+        ErrorRequestCoordinator errorRequestCoordinator = null;
+        if (errorBuilder != null) {
+            errorRequestCoordinator = new ErrorRequestCoordinator(parentCoordinator);
+            parentCoordinator = errorRequestCoordinator;
+        }
+        // 主要的构造
+        Request mainRequest =
+            buildThumbnailRequestRecursive(
+                target,
+                targetListener,
+                parentCoordinator,
+                transitionOptions,
+                priority,
+                overrideWidth,
+                overrideHeight,
+                requestOptions);
+
+        if (errorRequestCoordinator == null) {
+            return mainRequest;
+        }
+        // 异常处理
+        
+        return errorRequestCoordinator;
+    }
+```
+buildThumbnailRequestRecursive 方法里
+```
+    private Request buildThumbnailRequestRecursive(
+        Target<TranscodeType> target,
+        RequestListener<TranscodeType> targetListener,
+        @Nullable RequestCoordinator parentCoordinator,
+        TransitionOptions<?, ? super TranscodeType> transitionOptions,
+        Priority priority,
+        int overrideWidth,
+        int overrideHeight,
+        RequestOptions requestOptions) {
+        // 缩略图的 Builder thumbnailBuilder 不为 null
+        if (thumbnailBuilder != null) {
+            
+            return coordinator;
+        } else if (thumbSizeMultiplier != null) {
+            // 缩略图配置不为 null
+            // Base case: thumbnail multiplier generates a thumbnail request, but cannot recurse.
+            
+            return coordinator;
+        } else {
+            // 无缩略图时
+            return obtainRequest(
+                target,
+                targetListener,
+                requestOptions,
+                parentCoordinator,
+                transitionOptions,
+                priority,
+                overrideWidth,
+                overrideHeight);
+        }
+    }
+```
+可以看到，根据缩略图做了一个不同的处理，那最终会调用到这里， 创建出来的是一个 SingleRequest 对象
+```
+    private Request obtainRequest() {
+        return SingleRequest.obtain(
+            context,
+            glideContext,
+            model,
+            transcodeClass,
+            requestOptions,
+            overrideWidth,
+            overrideHeight,
+            priority,
+            target,
+            targetListener,
+            requestListeners,
+            requestCoordinator,
+            glideContext.getEngine(),
+            transitionOptions.getTransitionFactory());
+  }
+```
+所以，实际加载在 SingleRequest 的 begin 方法里，
+```
+    public void begin() {
+        // 状态记录，异常检测等等
+        
+
+        // Restarts for requests that are neither complete nor running can be treated as new requests
+        // and can run again from the beginning.
+        status = Status.WAITING_FOR_SIZE;
+        if (Util.isValidDimensions(overrideWidth, overrideHeight)) {
+            // 开始执行任务
+            onSizeReady(overrideWidth, overrideHeight);
+        } else {
+            // this 指 SizeReadyCallback 实现，回调是 onSizeReady，同上
+            target.getSize(this);
+        }
+        
+    }
+```
+onSizeReady 实现，这里的 engine 是 Glide 里核心的加载类 Engine ，缓存加载方式也在这个类中
+```
+    public void onSizeReady(int width, int height) {
+        
+        loadStatus = engine.load(
+            glideContext,
+            model,
+            requestOptions.getSignature(),
+            this.width,
+            this.height,
+            requestOptions.getResourceClass(),
+            transcodeClass,
+            priority,
+            requestOptions.getDiskCacheStrategy(),
+            requestOptions.getTransformations(),
+            requestOptions.isTransformationRequired(),
+            requestOptions.isScaleOnlyOrNoTransform(),
+            requestOptions.getOptions(),
+            requestOptions.isMemoryCacheable(),
+            requestOptions.getUseUnlimitedSourceGeneratorsPool(),
+            requestOptions.getUseAnimationPool(),
+            requestOptions.getOnlyRetrieveFromCache(),
+            this);
+        
+    }
+```
+## Glide 缓存加载机制
+关键的缓存加载代码在 com.bumptech.glide.load.engine 包 Engine 这个类。 Engine 里有一个 load 方法加载缓存, 该方法比较长我们逐层分析，先来看看这个方法的构造吧. 注释如下翻译
+
+### 构造高速缓存的 key
+```
+    /**
+    * 根据给定参数，启动一个加载流程
+    * 必须要在主线程中调用
+    * 任何请求的流程如下
+    *   1. 检查当前使用的资源集是否存在，若是则返回 active 的资源，同时
+    *   移动最新的 inactive 状态的资源到 memory Cache里
+    *   2. 检查 memory cache 是否存在，若是则返回缓存的资源
+    *   3. 检查当前正在加载的集合，并且将 ResourceCallback 添加到集合中
+    *   4. 若都不满足，加载一个新图片
+    *
+    * 活动资源是指已提供给至少一个请求但尚未提供的资源
+    * 被释放了。一旦资源的所有使用者都释放了该资源，那么
+    * 转到缓存。如果资源从缓存返回给新的使用者，则将其重新添加到
+    * 有效资源。如果资源从缓存中逐出，则其资源将被回收并
+    * 如果可能，请重新使用，资源将被丢弃。没有严格的要求
+    * 消费者释放了他们的资源，因此活动资源被弱持有。
+    */
+    public <R> LoadStatus load() {
+        Util.assertMainThread();
+        long startTime = VERBOSE_IS_LOGGABLE ? LogTime.getLogTime() : 0;
+
+        EngineKey key = keyFactory.buildKey(model, signature, width, height, transformations,
+            resourceClass, transcodeClass, options);
+```
+方法参数比较多，就不一一介绍了，有好几个参数是用来构造 EngineKey 的。 EngineKey 是用来干嘛的呢? 它是一种只在内存中使用的高速缓存密钥，用于多路传输负载，简单的理解就是 HashMap 的key，用于寻址用的。
+
+具体是一个什么样的 key，感兴趣的伙伴可以往下看，大佬可以直接跳过，关注缓存机制即可
+
+从 EngineKeyFactory 可以找到，这个key是直接 new 出来的. EngineKey 的详细如下 
+```
+    class EngineKey implements Key {
+        
+
+        EngineKey() {
+            // Preconditions 是 Google Guava的一个工具集合，很便利
+            // 代码也很优雅，不了解的同学可以关注一下
+            this.model = Preconditions.checkNotNull(model);
+            this.signature = Preconditions.checkNotNull(signature, "Signature must not be null");
+            this.width = width;
+            this.height = height;
+            this.transformations = Preconditions.checkNotNull(transformations);
+            this.resourceClass =
+                Preconditions.checkNotNull(resourceClass, "Resource class must not be null");
+            this.transcodeClass =
+                Preconditions.checkNotNull(transcodeClass, "Transcode class must not be null");
+            this.options = Preconditions.checkNotNull(options);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o instanceof EngineKey) {
+                EngineKey other = (EngineKey) o;
+                return model.equals(other.model)
+                    && signature.equals(other.signature)
+                    && height == other.height
+                    && width == other.width
+                    && transformations.equals(other.transformations)
+                    && resourceClass.equals(other.resourceClass)
+                    && transcodeClass.equals(other.transcodeClass)
+                    && options.equals(other.options);
+            }
+            return false;
+        }
+
+        @Override
+        public int hashCode() {
+            if (hashCode == 0) {
+                hashCode = model.hashCode();
+                hashCode = 31 * hashCode + signature.hashCode();
+                hashCode = 31 * hashCode + width;
+                hashCode = 31 * hashCode + height;
+                hashCode = 31 * hashCode + transformations.hashCode();
+                hashCode = 31 * hashCode + resourceClass.hashCode();
+                hashCode = 31 * hashCode + transcodeClass.hashCode();
+                hashCode = 31 * hashCode + options.hashCode();
+            }
+            return hashCode;
+        }
+    }
+```
+可以发现，是一个很普通的 Java 实体对象, 不同的是，它重写了 equals 和 hashCode 方法. 至于为什么这么写，还在研究中
+
+### 一级缓存
+
+拿到 EngineKey后，就到了加载一级缓存的地方了， 使用 EngineKey 来查找调用 loadFromActiveResources， 返回一个 EngineResource，不为 null 就会调用 ResourceCallback 也就是 cb.onResourceReady 方法，将结果回传
+```
+        EngineResource<?> active = loadFromActiveResources(key, isMemoryCacheable);
+        if (active != null) {
+            cb.onResourceReady(active, DataSource.MEMORY_CACHE);
+            if (VERBOSE_IS_LOGGABLE) {
+                logWithTimeAndKey("Loaded resource from active resources", startTime, key);
+            }
+            return null;
+        }
+```
+loadFromActiveResources 里是从 ActiveResources 里获取 EngineResource
+```
+    private final ActiveResources activeResources;
+
+    @Nullable
+    private EngineResource<?> loadFromActiveResources(Key key, boolean isMemoryCacheable) {
+        
+        // 从一级缓存中读取
+        EngineResource<?> active = activeResources.get(key);
+        if (active != null) {
+            // 不为空，EngineResource 的引用计数 + 1
+            active.acquire();
+        }
+
+        return active;
+    }
+```
+来看看 Glide 的一级缓存究竟是如何实现的，这里也就是核心的地方了，要学习的小伙伴记得做好笔记了
+```
+    final class ActiveResources {
+        
+        // HashMap 一级缓存，用于保存 active 状态的 ResourceWeakReference
+        final Map<Key, ResourceWeakReference> activeEngineResources = new HashMap<>();
+
+        // EngineResource 引用队列， 触发 GC 时，通知用户线程
+        private ReferenceQueue<EngineResource<?>> resourceReferenceQueue;
+        
+        // 清理引用队列数据的线程
+        private Thread cleanReferenceQueueThread;
+        
+        
+        /**
+        * 将一个 EngineResource 标识为 activate，并存储在一级缓存中 
+        */
+        void activate(Key key, EngineResource<?> resource) {
+            // 创建一个 ResourceWeakReference，存储到   
+            // 一级缓存 HashMap 中
+            ResourceWeakReference toPut =
+                new ResourceWeakReference(
+                    key,
+                    resource,
+                    getReferenceQueue(),
+                    isActiveResourceRetentionAllowed);
+
+            ResourceWeakReference removed = activeEngineResources.put(key, toPut);
+            if (removed != null) {
+                removed.reset();
+            }
+        }
+
+        /**
+        * 从一级缓存中获取 EngineResource
+        * /
+        EngineResource<?> get(Key key) {
+            ResourceWeakReference activeRef = activeEngineResources.get(key);
+            if (activeRef == null) {
+                return null;
+            }
+
+            EngineResource<?> active = activeRef.get();
+            if (active == null) {
+                cleanupActiveReference(activeRef);
+            }
+            return active;
+        }
+```
+
+可以发现，我们需要的 EngineResource 被封装到 ResourceWeakReference 中。
+ResourceWeakReference 其实是一个弱引用，封装了 Key，Resource 等信息
+```
+    static final class ResourceWeakReference extends WeakReference<EngineResource<?>> {
+
+        @SuppressWarnings("WeakerAccess") @Synthetic final Key key;
+        @SuppressWarnings("WeakerAccess") @Synthetic final boolean isCacheable;
+
+        @Nullable @SuppressWarnings("WeakerAccess") @Synthetic Resource<?> resource;
+
+        @Synthetic
+        @SuppressWarnings("WeakerAccess")
+        ResourceWeakReference(
+            @NonNull Key key,
+            @NonNull EngineResource<?> referent,
+            @NonNull ReferenceQueue<? super EngineResource<?>> queue,
+            boolean isActiveResourceRetentionAllowed) {
+            super(referent, queue);
+            this.key = Preconditions.checkNotNull(key);
+            this.resource =
+                referent.isCacheable() && isActiveResourceRetentionAllowed
+                    ? Preconditions.checkNotNull(referent.getResource()) : null;
+            isCacheable = referent.isCacheable();
+        }
+
+        void reset() {
+            resource = null;
+            clear();
+        }
+    }
+```
+也就是说一级缓存，本质上就是通过弱引用实现的一个内存缓存机制，在 GC 没有触发时，就能快速的从内存中拿到图片缓存
+
+### 二级缓存
+
+如果一级缓存没有获取到资源，则会从 loadFromCache 方法中读取二级缓存的资源，该步骤也是从内存中读取
+```
+        EngineResource<?> cached = loadFromCache(key, isMemoryCacheable);
+        if (cached != null) {
+            cb.onResourceReady(cached, DataSource.MEMORY_CACHE);
+            if (VERBOSE_IS_LOGGABLE) {
+                logWithTimeAndKey("Loaded resource from cache", startTime, key);
+            }
+            return null;
+        }
+```
+loadFromCache 方法中，调用 getEngineResourceFromCache 方法获取，如果拿到缓存，acquire 操作，计数器 +1， 同时存储到一级缓存 activeResources 中
+```
+        private EngineResource<?> loadFromCache(Key key, boolean isMemoryCacheable) {
+            
+
+            EngineResource<?> cached = getEngineResourceFromCache(key);
+            if (cached != null) {
+                cached.acquire();
+                // 存储到一级缓存中
+                activeResources.activate(key, cached);
+            }
+            return cached;
+        }
+```
+而 getEngineResourceFromCache 方法中，使用到了 MemoryCache，读取的缓存类型是 Resource，如果不是 EngineResource 类型，则封装为 EngineResource 返回
+```        
+        private final MemoryCache cache;
+
+        private EngineResource<?> getEngineResourceFromCache(Key key) {
+            // 这里调用的是 remove，从二级缓存中移除
+            Resource<?> cached = cache.remove(key);
+
+            final EngineResource<?> result;
+            if (cached == null) {
+                result = null;
+            } else if (cached instanceof EngineResource) {
+                // Save an object allocation if we've cached an EngineResource (the typical case).
+                result = (EngineResource<?>) cached;
+            } else {
+                result = new EngineResource<>(cached, true /*isMemoryCacheable*/, true /*isRecyclable*/);
+            }
+            return result;
+        }
+```
+逻辑很清楚，主要来看看 Glide 二级缓存是怎么个实现法。我们发现，其实 MemoryCache 是一个接口对象，具体的实现并不在 Engine 类中，而是在 GlideBuilder 中
+```
+    Glide build(@NonNull Context context) {
+    
+    if (memoryCache == null) {
+        memoryCache = new LruResourceCache(memorySizeCalculator.getMemoryCacheSize());
+    }
+```
+
+也就是说，如果我们没有实现 MemoryCache 接口自定义二级缓存的方式，则默认是使用 LruResourceCache，继承自 LruCache 类，这个是 Glide 自己实现的,跟 Android 系统提供给我们的 LruCache 不太一样。  
+```
+    public class LruResourceCache extends LruCache<Key, Resource<?>> implements MemoryCache {
+        
+    }
+
+    public class LruCache<T, Y> {
+        // LRU算法的核心 LinkedHashMap
+        private final Map<T, Y> cache = new LinkedHashMap<>(100, 0.75f, true);
+        
+        public LruCache(long size) {
+            this.initialMaxSize = size;
+            // 最大的缓存大小
+            this.maxSize = size;
+        }
+
+        /**
+        * 重新设置最大缓存大小，如果超出，则重新计算，驱逐出旧数据 evict()
+        */
+        public synchronized void setSizeMultiplier(float multiplier) {
+            if (multiplier < 0) {
+                throw new IllegalArgumentException("Multiplier must be >= 0");
+            }
+            maxSize = Math.round(initialMaxSize * multiplier);
+            evict();
+        }
+        
+        
+
+        /**
+        * 根据 key 缓存 item，并返回已存在 key 对应的旧 item
+        * 如果 item 的大小超过最大缓存大小，item 将不会被缓存，onItemEvicted 将会被触发调用
+        */
+        @Nullable
+        public synchronized Y put(@NonNull T key, @Nullable Y item) {
+            final int itemSize = getSize(item);
+            if (itemSize >= maxSize) {
+                // 超过最大缓存大小，放弃缓存，告知用户线程
+                onItemEvicted(key, item);
+                return null;
+            }
+
+            if (item != null) {
+                currentSize += itemSize;
+            }
+            @Nullable final Y old = cache.put(key, item);
+            if (old != null) {
+                // 如果存在旧 item 值，重新计算当前缓存大小
+                currentSize -= getSize(old);
+
+                if (!old.equals(item)) {
+                    // 大小不一致时，驱逐出旧数据，告知用户线程
+                    onItemEvicted(key, old);
+                }
+            }
+            // 执行驱逐算法
+            evict();
+
+            return old;
+        }
+
+        /**
+        * 移除 key 对应的缓存
+        */
+        @Nullable
+        public synchronized Y remove(@NonNull T key) {
+            final Y value = cache.remove(key);
+            if (value != null) {
+                currentSize -= getSize(value);
+            }
+            return value;
+        }
+
+        /**
+        * 当当前的缓存大小大于 size 参数时，
+        * 移除最近最少使用的 item
+        */
+        protected synchronized void trimToSize(long size) {
+            Map.Entry<T, Y> last;
+            Iterator<Map.Entry<T, Y>> cacheIterator;
+            while (currentSize > size) {
+                cacheIterator  = cache.entrySet().iterator();
+                last = cacheIterator.next();
+                final Y toRemove = last.getValue();
+                currentSize -= getSize(toRemove);
+                final T key = last.getKey();
+                cacheIterator.remove();
+                onItemEvicted(key, toRemove);
+            }
+        }
+
+        private void evict() {
+            trimToSize(maxSize);
+        }
+    }
+```
+二级缓存很好的展示了如何自己实现一个 LruCache， 最关键的是使用了 LinkedHashMap。 LinkedHashMap 是 Hashmap 和链表的结合体，通过链表来记录元素的顺序和链接关系，通过HashMap来存储数据, 它可以控制元素的被遍历时候输出的顺序（按照最近访问顺序来排序，还是按插入顺序）
+
+### 三级缓存
+
+如果二级Lru缓存里也没有数据的情况下，那么就到了三级缓存 ==>> Jobs!!
+```
+        EngineJob<?> current = jobs.get(key, onlyRetrieveFromCache);
+        if (current != null) {
+            current.addCallback(cb);
+            if (VERBOSE_IS_LOGGABLE) {
+                logWithTimeAndKey("Added to existing load", startTime, key);
+            }
+            return new LoadStatus(cb, current);
+        }
+```
+这里 Jobs 三级缓存代码不多，使用 HashMap 来缓存 EngineJob 对象
+```
+    final class Jobs {
+        private final Map<Key, EngineJob<?>> jobs = new HashMap<>();
+        private final Map<Key, EngineJob<?>> onlyCacheJobs = new HashMap<>();
+
+        @VisibleForTesting
+        Map<Key, EngineJob<?>> getAll() {
+            return Collections.unmodifiableMap(jobs);
+        }
+
+        EngineJob<?> get(Key key, boolean onlyRetrieveFromCache) {
+            return getJobMap(onlyRetrieveFromCache).get(key);
+        }
+
+        void put(Key key, EngineJob<?> job) {
+            getJobMap(job.onlyRetrieveFromCache()).put(key, job);
+        }
+
+        void removeIfCurrent(Key key, EngineJob<?> expected) {
+            Map<Key, EngineJob<?>> jobMap = getJobMap(expected.onlyRetrieveFromCache());
+            if (expected.equals(jobMap.get(key))) {
+                jobMap.remove(key);
+            }
+        }
+
+        private Map<Key, EngineJob<?>> getJobMap(boolean onlyRetrieveFromCache) {
+            return onlyRetrieveFromCache ? onlyCacheJobs : jobs;
+        }
+    }
+```
+而这个关键的 EngineJob 是什么呢？ 可以想象得到至少包含了图片缓存的相关信息
+
+### 四级缓存？
+在前面三级缓存都没有加载到图片的情况下， 则会创建一个 EngineJob, 并保存到 jobs 三级缓存中
+```
+    EngineJob<R> engineJob =
+        engineJobFactory.build(
+            key,
+            isMemoryCacheable,
+            useUnlimitedSourceExecutorPool,
+            useAnimationPool,
+            onlyRetrieveFromCache);
+
+    DecodeJob<R> decodeJob =
+        decodeJobFactory.build(
+            
+            engineJob);
+    // 添加到缓存 jobs
+    jobs.put(key, engineJob);
+    // 添加callback，这里的 cb 是指 SingleRequest
+    engineJob.addCallback(cb);
+    // EngineJob 线程池启动 DecodeJob
+    engineJob.start(decodeJob);
+    
+    // 返回图片加载结果的状态
+    return new LoadStatus(cb, engineJob);
+  }
+```
+启动 engineJob 时，会用线程池开启异步任务，执行 DecodeJob. 这一步就不再算是缓存了，最终返回了一个 LoadStatus 加载结果的状态对象。  
+到这里稍微总结下，可以发现 Glide 内部实现了三级缓存，分别是
+
+1. 使用 WeakReference + HashMap 实现一级缓存
+2. 实现 MemoryCache 接口，自定义了 LruCache 的方式来当做二级缓存
+3. 使用两个 HashMap 保存 EngineJob 信息的 三级缓存
+
+### 下载图片
+在上一步的，EngineJob 和 DecodeJob 创建过程中, engineJob.start(decodeJob) ， 调用 DecodeJob 的 run 方法
+```
+
+    public void run() {
+        
+        // 核心的图片下载实现 DataFetcher
+        DataFetcher<?> localFetcher = currentFetcher;
+        try {
+            if (isCancelled) {
+                notifyFailed();
+                return;
+            }
+            runWrapped();
+        } catch (Throwable t) {
+            
+        }
+        
+    }
+```
+runWrapped， 第一次加载图片，走 INITIALIZE 逻辑
+```
+    private void runWrapped() {
+        switch (runReason) {
+        case INITIALIZE:
+            // 获取下一步的 stage: Stage.RESOURCE_CACHE
+            stage = getNextStage(Stage.INITIALIZE);
+            // 根据状态更换 currentGenerator 生成器: ResourceCacheGenerator
+            currentGenerator = getNextGenerator();
+            runGenerators();
+            break;
+            
+        }
+    }
+
+    private Stage getNextStage(Stage current) {
+        switch (current) {
+        case INITIALIZE:
+            // 这里的 diskCacheStrategy 来自 RequestOptions 的默认配置
+            // DiskCacheStrategy diskCacheStrategy = DiskCacheStrategy.AUTOMATIC;
+            // decodeCachedResource 返回 true
+            return diskCacheStrategy.decodeCachedResource()
+                ? Stage.RESOURCE_CACHE : getNextStage(Stage.RESOURCE_CACHE);
+        case RESOURCE_CACHE:
+            // decodeCachedData 返回 true
+            return diskCacheStrategy.decodeCachedData()
+                ? Stage.DATA_CACHE : getNextStage(Stage.DATA_CACHE);
+        case DATA_CACHE:
+            // Skip loading from source if the user opted to only retrieve the resource from cache.
+            return onlyRetrieveFromCache ? Stage.FINISHED : Stage.SOURCE;
+            
+        }
+    }
+
+    private DataFetcherGenerator getNextGenerator() {
+        switch (stage) {
+        case RESOURCE_CACHE:
+            // 第一次加载时，创建 ResourceCacheGenerator
+            return new ResourceCacheGenerator(decodeHelper, this);
+        case DATA_CACHE:
+            return new DataCacheGenerator(decodeHelper, this);
+        case SOURCE:
+            return new SourceGenerator(decodeHelper, this);
+        case FINISHED:
+            return null;
+        default:
+            throw new IllegalStateException("Unrecognized stage: " + stage);
+        }
+    }
+```
+runGenerators
+```
+    private void runGenerators() {
+        
+        // 调用生成器 ResourceCacheGenerator 的 startNext 
+        while (!isCancelled && currentGenerator != null
+            && !(isStarted = currentGenerator.startNext())) {
+            // 加载完后，获取下一步的状态和生成器
+            stage = getNextStage(stage);
+            currentGenerator = getNextGenerator();
+
+            if (stage == Stage.SOURCE) {
+                // 重新运行 run 方法
+                reschedule();
+                return;
+            }
+        }
+        
+    }
+```
+startNext 方法，截取关键部分， ModelLoader 的来源比较复杂，就直接替大家找到了是 
+```
+    public boolean startNext() {
+        
+        loadData = null;
+        boolean started = false;
+        // 第一次满足条件
+        while (!started && hasNextModelLoader()) {
+            ModelLoader<File, ?> modelLoader = modelLoaders.get(modelLoaderIndex++);
+            loadData = modelLoader.buildLoadData(cacheFile,
+                helper.getWidth(), helper.getHeight(), helper.getOptions());
+            if (loadData != null && helper.hasLoadPath(loadData.fetcher.getDataClass())) {
+                started = true;
+                // loadData 开始加载数据
+                loadData.fetcher.loadData(helper.getPriority(), this);
+            }
+        }
+
+        return started;
+    }
+```
+loadData 是 HttpGlideUrlLoader ，而 loadData.fetcher 是 HttpUrlFetcher
+```
+    HttpGlideUrlLoader.java 
+    // 构建包含 HttpUrlFetcher 的 LoadData
+    @Override
+    public LoadData<InputStream> buildLoadData(@NonNull GlideUrl model, int width, int height,
+        @NonNull Options options) {
+        GlideUrl url = model;
+        if (modelCache != null) {
+            url = modelCache.get(model, 0, 0);
+            if (url == null) {
+                modelCache.put(model, 0, 0, model);
+                url = model;
+            }
+        }
+        int timeout = options.get(TIMEOUT);
+        return new LoadData<>(url, new HttpUrlFetcher(url, timeout));
+    }
+
+loadData
+
+    @Override
+    public void loadData(@NonNull Priority priority,
+        @NonNull DataCallback<? super InputStream> callback) {
+        
+        InputStream result = loadDataWithRedirects(glideUrl.toURL(), 0, null, glideUrl.getHeaders());
+        callback.onDataReady(result);
+        
+    }
+```
+到这里就是具体加载图片的细节了，用的是 HttpURLConnection 来下载图片
+```
+    private InputStream loadDataWithRedirects(URL url, int redirects, URL lastUrl,
+      Map<String, String> headers) throws IOException {
+        if (redirects >= MAXIMUM_REDIRECTS) {
+            throw new HttpException("Too many (> " + MAXIMUM_REDIRECTS + ") redirects!");
+        } else {
+            // Comparing the URLs using .equals performs additional network I/O and is generally broken.
+            // See http://michaelscharf.blogspot.com/2006/11/javaneturlequals-and-hashcode-make.html.
+            try {
+                if (lastUrl != null && url.toURI().equals(lastUrl.toURI())) {
+                throw new HttpException("In re-direct loop");
+
+                }
+            } catch (URISyntaxException e) {
+                // Do nothing, this is best effort.
+            }
+        }
+
+        urlConnection = connectionFactory.build(url);
+        for (Map.Entry<String, String> headerEntry : headers.entrySet()) {
+            urlConnection.addRequestProperty(headerEntry.getKey(), headerEntry.getValue());
+        }
+        urlConnection.setConnectTimeout(timeout);
+        urlConnection.setReadTimeout(timeout);
+        urlConnection.setUseCaches(false);
+        urlConnection.setDoInput(true);
+
+        // Stop the urlConnection instance of HttpUrlConnection from following redirects so that
+        // redirects will be handled by recursive calls to this method, loadDataWithRedirects.
+        urlConnection.setInstanceFollowRedirects(false);
+
+        // Connect explicitly to avoid errors in decoders if connection fails.
+        urlConnection.connect();
+        // Set the stream so that it's closed in cleanup to avoid resource leaks. See #2352.
+        stream = urlConnection.getInputStream();
+        if (isCancelled) {
+            return null;
+        }
+        final int statusCode = urlConnection.getResponseCode();
+        if (isHttpOk(statusCode)) {
+            return getStreamForSuccessfulRequest(urlConnection);
+        } else if (isHttpRedirect(statusCode)) {
+            String redirectUrlString = urlConnection.getHeaderField("Location");
+            if (TextUtils.isEmpty(redirectUrlString)) {
+                throw new HttpException("Received empty or null redirect url");
+            }
+            URL redirectUrl = new URL(url, redirectUrlString);
+            // Closing the stream specifically is required to avoid leaking ResponseBodys in addition
+            // to disconnecting the url connection below. See #2352.
+            cleanup();
+            return loadDataWithRedirects(redirectUrl, redirects + 1, url, headers);
+        } else if (statusCode == INVALID_STATUS_CODE) {
+            throw new HttpException(statusCode);
+        } else {
+            throw new HttpException(urlConnection.getResponseMessage(), statusCode);
+        }
+  }
+```
+综上，ModelLoader 里存放着 glide 的网络下载组件 ModelLoader，ModelLoader 里有网络下载器的实现细节 DataFetcher 。
+因此，当我们需要自定义网络配置时，就要实现这两个接口，然后注册到 Registry 即可

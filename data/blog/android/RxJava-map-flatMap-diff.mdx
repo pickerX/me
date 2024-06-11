@@ -1,0 +1,126 @@
+---
+title: RxJava-map&flatMap操作区别
+date: 2019-09-03 15:55:29
+tags: ['Android']
+---
+
+map， flatmap 操作符在 RxJava 里都是用于数据类型转换
+
+#### 相同点:
+
+参数相同, 都是使用 Function(入参，返回值) 进行转换（将一个类型依据程序逻辑转换成另一种类型，根据入参和返回值）,都能在转换后直接被 subscribe
+
+### 不同点：
+#### 返回参数不同
+    
+1. map返回的是 ```Function<? super T, ? extends R>``` R 类型，
+2. flatmap返回的是 ```Function<? super T, ? extends ObservableSource<? extends R>>```, 包含R类型的 ObservableSource 对象
+   
+#### 使用方式不同, 
+
+1. map只能单一转换，单一指的是只能一对一进行转换, map被订阅时每传递一个事件执行一次onNext方法   
+2. flatmap多用于多对多，一对多，再被转化为多个时，一般利用from/just进行一一分发，被订阅时将所有数据传递完毕汇总到一个Observable然后一一执行onNext方法
+
+### Sample
+map 测试
+```
+     Observable.just("hello", "sealink", "what", "are", "you", "doing", "?")
+                .map(new Function<String, Integer>() {
+                    @Override
+                    public Integer apply(String s) {
+                        Log.e("RxJava", "map apply:" + s);
+                        return s.length();
+                    }
+                })
+                .subscribeOn(Schedulers.newThread())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Observer<Integer>() {
+                    @Override
+                    public void onSubscribe(Disposable d) {
+
+                    }
+
+                    @Override
+                    public void onNext(Integer integer) {
+                        Log.e("RxJava", "map onNext:" + integer);
+                    }
+
+                    @Override
+                    public void onError(Throwable e) {
+
+                    }
+
+                    @Override
+                    public void onComplete() {
+
+                    }
+                });
+```
+输出结果
+```
+    03-05 13:43:01.088 13889-13914/? E/RxJava: map apply:hello
+        map apply:sealink
+    03-05 13:43:01.089 13889-13914/? E/RxJava: map apply:what
+        map apply:are
+        map apply:you
+        map apply:doing
+        map apply:?
+    03-05 13:43:01.089 13889-13889/? E/RxJava: map onNext:5
+        map onNext:7
+        map onNext:4
+        map onNext:3
+        map onNext:3
+        map onNext:5
+        map onNext:1
+```
+flatMap 测试
+```
+    Observable.just("hello", "sealink", "what", "are", "you", "doing", "?")
+                flatMap(new Function<String, ObservableSource<Integer>>() {
+                    @Override
+                    public ObservableSource<Integer> apply(String s) {
+                        Log.e("RxJava", "flatMap apply: " + s);
+                        return Observable.just(s.length());
+                    }
+                })
+                .subscribeOn(Schedulers.newThread())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Observer<Integer>() {
+                    @Override
+                    public void onSubscribe(Disposable d) {
+
+                    }
+
+                    @Override
+                    public void onNext(Integer integer) {
+                        Log.e("RxJava", "flatMap onNext: " + integer);
+                    }
+
+                    @Override
+                    public void onError(Throwable e) {
+
+                    }
+
+                    @Override
+                    public void onComplete() {
+
+                    }
+                });
+```
+输出结果
+```
+    03-05 13:44:49.518 14089-14113/? E/RxJava: flatMap apply: hello
+        flatMap apply: sealink
+        flatMap apply: what
+        flatMap apply: are
+        flatMap apply: you
+        flatMap apply: doing
+        flatMap apply: ?
+    03-05 13:44:49.518 14089-14089/? E/RxJava: flatMap onNext: 5
+        flatMap onNext: 7
+        flatMap onNext: 4
+        flatMap onNext: 3
+        flatMap onNext: 3
+        flatMap onNext: 5
+        flatMap onNext: 1
+```

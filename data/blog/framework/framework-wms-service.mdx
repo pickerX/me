@@ -1,0 +1,52 @@
+---
+title: framework学习のWMS服务
+date: '2021-01-26 15:00:34'
+tags: ['Android']
+draft: false
+---
+
+### Window简介
+Android中，Window是一个重要部分，用户看到的界面、触摸显示界面进行一系列操作都涉及到Window。但实际上，Window本身并不具备绘制功能。
+该篇简单介绍下Window的一点内容，同时总结下WMS的启动过程。在下篇会逐步介绍一个Activity是如何创建出窗口 并 添加到WMS中的。
+该篇基于Andorid10的代码。
+
+窗口涉及到一下几个功能：
+
++ 窗口管理-WMS: WMS管理窗口的创建、添加、删除、大小、层级等等。
+
++ 输入中转-IMS(InputManagerService): 触摸窗口产生触摸事件，IMS对触摸事件进行处理，最后寻找一个最合适窗口进行反馈处理。
+
++ 窗口动画(WindowAnimator): 窗口间进行切换时，使用窗口动画可以实现更好的效果，窗口动画主要由WindowAnimator管理。可以在开发者模式菜单找到相应设置。
+
++ Surface管理(SurfaceFlinger)  
+窗口不具备有绘制的功能，因此每个窗口都需要有一块Surface来供自己绘制。为每个窗口分配Surface是由WMS来完成的。
+Surface就像画布，然后通过Canvas或OpenGL绘制。
+SurfaceFlinger的作用主要是merge Surface，它接受多个来源的Surface图形显示数据(所有Surface：所有Window的Surface，特殊情况 有些Surface跟Window无关，如StrictMode)，然后将他们合并(根据特定顺序Z-order)，然后发送到显示设备。如最常见的界面是3层，顶部的statusbar,底部的导航栏，应用界面。
+
+### WMS简介
+WMS同之前总结过的AMS、PMS一样（链接：AMS的启动 、AMS之应用的第一次启动过程、PMS的启动及应用的安装过程），是系统服务，作为Binder的服务端。 下表简单对比列出下：
+
+|  系统服务   | binder服务端  |  binder客户端   | 服务名  |
+|  ----  | ----  |  ----  | ----  |
+| AMS  | ActivityManagerService(extends IActivityManager.Stub) | ActivityManager  | activity(Context.ACTIVITY_SERVICE) |
+| PMS  | PackageManagerService(extends IPackageManager.Stub) | PackageManager  | package |
+| WMS  | WindowManagerService(extends IWindowManager.Stub) | WindowManager  | window(Context.WINDOW_SERVICE) |
+
+一般获取方法：
+获取binder客户端，与服务通信，类似：
+
+```
+ActivityManager am = (ActivityManager) context.getSystemService("activity");
+ActivityManager am = context.getSystemService(ActivityManager.class);
+```
+
+从ServiceManager获取服务的Binder，类似：
+
+```IBinder binder = ServiceManager.getService(Context.ACTIVITY_SERVICE);```
+
+下面两个也是用的ServiceManager.getService()：
+
+```
+IActivityManager mgr = ActivityManager.getService();
+PackageManagerService pm = (PackageManagerService) ServiceManager.getService("package");
+```

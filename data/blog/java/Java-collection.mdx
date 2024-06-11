@@ -1,0 +1,74 @@
+---
+title: Java集合
+date: 2018-2-9 10:00:40
+tags: ['Java']
+---
+### 集合
+集合框架的设计目标：  
+1. 该框架必须是高性能的。基本集合（动态数组，链表，树，哈希表）的实现也必须是高效的。  
+2. 该框架允许不同类型的集合，以类似的方式工作，具有高度的互操作性。
+3. 对一个集合的扩展和适应必须是简单的。  
+
+为此，整个集合框架就围绕一组标准接口而设计。你可以直接使用这些接口的标准实现，诸如：LinkedList, HashSet, 和 TreeSet 等,除此之外你也可以通过这些接口实现自己的集合。  
+
+### 集合框架
+![集合框架](http://www.runoob.com/wp-content/uploads/2014/01/2243690-9cd9c896e0d512ed.gif)
+
+其中，集合里一些注意点
+
+1. Collection List 采用线性列表的存储方式，长度可动态改变， Map采用键值对的存储方式，长度也能动态改变
+2. Set 接口实例存储的是无序的，不重复的数据。List 接口实例存储的是有序的，可以重复的元素。
+3. Set 检索效率低下，删除和插入效率高，插入和删除不会引起元素位置改变 实现类有 HashSet,TreeSet
+4. List 和数组类似，可以动态增长，根据实际存储的数据的长度自动增长List的长度。查找元素效率高，插入删除效率低，因为会引起其他元素位置改变 实现类有 ArrayList, LinkedList,Vector。
+
+### 线程安全的集合等工具
+
+上面常用的集合都有一个特点，它们都不是线程安全的，Vector, HashTable 除外。
+Java针对线程安全，重新设计了与通用集合相同接口的一组集合。通常线程安全相关的类都会封装在java.util.concurrent 包里。虽然开发中我们经常使用线程，但真正用好的并不多，遇到多线程的问题时，往往会不知所措，找不到原因，所以我们有必要把这一块吃透。该文章先介绍线程安全的工具，后续再开篇幅介绍多线程.  
+
+concurrent 并发相关的包主要有三个，
+
+    java.util.concurrent
+    java.util.concurrent.locks
+    java.util.concurrent.atomic
+
+java.util.concurrent 下包含以下几大模块
+
+1. Executors
+   * Interfaces Executor是一个用来自定义具有线程功能的标准化接口，比如线程池，异步IO，轻量级任务架构
+   * Implementations 实现类如ThreadPoolExecutor，ScheduledThreadPoolExecutor， ForkJoinPool等等
+2. Queues 
+   * ConcurrentLinkedQueue 提供了一个高效，灵活的，非阻塞的线程安全队列
+   * ConcurrentLinkedDeque 同 ConcurrentLinkedQueue类似，额外实现了 Deque 接口, 提供了双向添加，删除对象的能力
+3. Timing   
+   TimeUnit, 时间工具，控制线程的执行时刻，周期等
+4. Synchronizers
+   五个处理并发线程的工具类
+   * [Semaphore](https://developer.android.google.cn/reference/java/util/concurrent/Semaphore) 信号量，一个经典的并发工具，常用于限制访问资源的线程数量
+   * [CountDownLatch](https://developer.android.google.cn/reference/java/util/concurrent/CountDownLatch) 简单易用的倒计时工具类，常用于阻塞其他线程对资源的访问
+   * [CyclicBarrier](https://developer.android.google.cn/reference/java/util/concurrent/CyclicBarrier)在一些并发的开发中，CyclicBarrier是一个让多线程相互阻塞直到某一个Barrier点的，可复用的工具类
+   * [Phaser](https://developer.android.google.cn/reference/java/util/concurrent/Phaser)提供一个更灵活的工具用于控制多线程的执行阶段
+   * [Exchanger](https://developer.android.google.cn/reference/java/util/concurrent/Exchanger)运行两个线程相互交换数据在指定的点上，在一些pipeline设计上非常有用.  
+5. Concurrent Collections
+   除了 Queues 外，Concurrent 包还提供了用于多线程的集合 
+   * ConcurrentHashMap 替换HashMap的线程安全集合
+   * ConcurrentSkipListMap 替换TreeMap的线程安全集合
+   * ConcurrentSkipListSet 
+   * CopyOnWriteArrayList  替换ArrayList的线程安全集合
+   * CopyOnWriteArraySet   并发优化的ArrayList。基于不可变对象策略，在修改时先复制出一个数组快照来修改，改好了，再让内部指针指向新数组。
+
+### Memory Consistency Properties  
+
+    内存一致性[Chapter 17 of The Java™ Language Specification](https://docs.oracle.com/javase/specs/jls/se8/html/jls-17.html#jls-17.4.5)定义了在内存操作的happens-before关系，比如对共享对象的读写操作。  
+    一个线程写操作的结果要被另一个线程查看到，写的操作必须 happens-before读的操作。synchronized，volatile关键字，Thread.start()， Thread.join()方法，常用于实现happens-before的关系。特别地，
+    1. Each action in a thread happens-before every action in that thread that comes later in the program's order.
+    2. An unlock (synchronized block or method exit) of a monitor happens-before every subsequent lock (synchronized block or method entry) of that same monitor. And because the happens-before relation is transitive, all actions of a thread prior to unlocking happen-before all actions subsequent to any thread locking that monitor.
+    3. A write to a volatile field happens-before every subsequent read of that same field. Writes and reads of volatile fields have similar memory consistency effects as entering and exiting monitors, but do not entail mutual exclusion locking.
+    4. A call to start on a thread happens-before any action in the started thread.
+    5. All actions in a thread happen-before any other thread successfully returns from a join on that thread.
+
+补充:[《深入理解Java集合框架》系列文章](http://www.cnblogs.com/CarpenterLee/p/5545987.html)
+
+参考内容：  
+[Android API](https://developer.android.google.cn/reference/java/util/concurrent/package-summary)  
+[Java API](https://docs.oracle.com/javase/8/docs/api/index.html)

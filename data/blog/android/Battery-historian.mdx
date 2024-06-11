@@ -1,0 +1,90 @@
+---
+title: Battery-historian电量优化
+date: 2018-10-14 14:40:48
+tags: ['Android']
+---
+### Battery Historian
+Battery Historian工具能监测一台设备在一段时间内的电量消耗。在整个系统级别，该工具能将系统的日志可视化为电量相关事件的网页展示
+在一个特定的app级别里，这个工具提供大量的数据，来帮助开发者识别耗电应用的行为。
+
+### Install
+1. 需要Docker环境支持，Install [Docker](https://docs.docker.com/install/) 并运行.
+2. 运行 Battery Historian 镜像，这个镜像需要翻墙下载，没有翻墙的可以找找国内的镜像
+
+    docker run -p port:9999 gcr.io/android-battery-historian/stable:3.0 --port 9999
+
+3. 使用浏览器打开 http://localhost:port, 选择步骤二生成的文件即可
+其他系统的安装方式，详见[https://github.com/google/battery-historian](https://github.com/google/battery-historian)
+
+### Analyze power use 
+完成上面的操作，可以看到如下类似的图，
+
+![Figure1 Battery Historian’s display of system-wide events affecting power consumption.](https://note.youdao.com/yws/api/personal/file/WEBdbc98d71317d7951c6d6810b73bffb35?method=download&shareKey=0c0c498e1eed053bf3ef61c4da34c869)
+
+横坐标表示时间，纵坐标就有各种各样的参数了 CPU，Screen，GPS等等信息，配上五颜六色的方块，顿时有点懵逼，有没有。 不过，贯穿整张表格的是一条黑线，而这条黑线就是表示设备的电量变化！！
+
+图二，电量的一个特写
+
+![Figure 2 provides a close-up of that part of the display.
+](https://note.youdao.com/yws/api/personal/file/WEBdb356575e5d6bc12e8e6cffc1cf4fb60?method=download&shareKey=008f240c970ff50a4c03acd274e70028)
+
+在表示电量消耗折线前端，因为电量明显地下降，表明了三个事情，
+1. CPU正在运行，
+2. 有应用 acquired 一个 wakelock， 
+3. 屏幕是亮的
+
+在这种情况下，Battery Historian 帮助开发者了解到耗电量高时设备发生了什么事件，然后就可以聚焦在事件行为中，研究是否有优化的空间。
+
+系统范围的可视化也可以提供其他的线索。比如，图中也展示了手机蜂窝数据被频繁的开关，这些都是可优化的地方，可以通过使用更智能的API来优化，如JobScheduler or Firebase Job Dispatcher.
+
+
+### View app-specific data
+除了宏观层(macro-level)的数据可视化外，Battery Historian也提供了一些分类和一些指定应用的可视化数据，数据包括，
++ 应用的耗电量估算值
++ 网络信息
++ Wakelocks
++ Services
++ 进程信息
+
+分类有两种标准衡量应用的数据。一个是，查看开发者的应用跟其他应用的耗电排行，选择 Device Power Estimates table 即可. 这个例子检验了一个测试应用Pug Power。
+
+![Figure 3. Investigating which apps consume the most power.](https://note.youdao.com/yws/api/personal/file/WEBbcd6db6a55c0e7e57ea1f4a4e52e9ebc?method=download&shareKey=80f0f90ab5538a60d9934141df884d41)
+图三中，Pug Power测试应用是耗电排行是第九位， 第三大的耗电应用并不是系统的一部分，这些数据表明开发者需要更进一步的查找原因。
+
+为了查看指定应用的数据，我们在App Selection里选择开发的测试应用即可.
+
+![Figure 4. Entering a specific app whose data to view.](https://note.youdao.com/yws/api/personal/file/WEBd165eaae5f9ee1eb7e7da807714ab870?method=download&shareKey=170611df2452e1ad45e97b8633d1436a)
+
+当选择了特定应用后，系统层级的数据分类就会变成如下的应用数据分类，
+
++ SyncManager.
++ Foreground process.
++ Userspace Wakelock.
++ Top app.
++ JobScheduler.
++ Activity Manager Proc.
+  
+如果应用执行 syncs 和 jobs 次数过多，SyncManager 和 JobScheduler 可视化数据就会很明显的变化。如果确实如此，应用就要优化 syncs 和jobs 操作来降低电量的使用.
+开发者除了能查看上面信息外，还能查看额外的信息：Userspace Wakelock. 需要在终端中执行如下命令:
+
+    $ adb shell dumpsys batterystats --enable full-wake-history
+
+    Note: From Android 6.0 (API level 23), the platform includes Doze functionality, which imposes certain optimizations on apps. For example, Doze batches jobs to take place during brief maintenance windows, regardless of how JobScheduler has scheduled them.
+
+图5，图6显示的是Pug Power的数据:
+
+![Figure 5. Visualization of data for fictional app Pug Power.](https://note.youdao.com/yws/api/personal/file/WEB889fd0d6f4c0018d67a32a3c33622fce?method=download&shareKey=28ba15c596238eacc947e816286b0690)
+![Figure 6. Tabular data for the fictional Pug Power app.](https://note.youdao.com/yws/api/personal/file/WEBe4ee4cf79c26b26a867197eee0e10397?method=download&shareKey=55322adde50b9694772b8f5a77553374)
+
+粗略的看，可视化图表没有很明显的数据变化.JobScheduler 坐标表明没有 Job 需要执行. SyncManager 坐标表示没有任何的 sync 操作.
+
+然而，看图6，Wakelocks 部分显示了 Pug Power 应用在一个小时里 acquires wakelocks 次数. 对于应用高功耗，这是不正常，也是昂贵的代价. 这部分的信息对开发者定位优化的范围是有很大的帮助的。这这个例子中，开发者就要考虑为什么会有这么多次的 wakelock，要如何才能改善?
+
+### Other cases where Battery Historian can help
+除了上面的内容外，Battery Historian 还能找到很多原因：
+
++ 多度频繁的启动 wakeup alarms (每10秒或更短).
++ 持续性的使用 GPS lock.
++ 调度 jobs（每30s或者更短）
++ 执行 syncs （每30s或者更短）
++ 超过预期，频繁的使用蜂窝数据

@@ -1,0 +1,178 @@
+---
+title: Android热修复方案
+date: 2021-02-11 11:14:09
+tags: ['Android']
+---
+Android 热修复方案已经出来多年了，根据实现方式看，基本上离不开以下两种：
+
+### 方案调研
+
++ 底层替换方案： 底层替换方案限制颇多，但时效性最好，加载轻快，立即见效 
+    + AndFix
+    + Sophix
+    + 
++ 类加载方案： 类加载方案时效性差，需要重新冷启动才能见效，但修复范围广，限制少 
+    + QZone超级补丁
+    + 微信Tinker
+    + 
+
+以现有的方案对比，
+
+支撑/方案 | Tinker | QZone | AndFix | Robust
+---|:--:|---:|---:|---:
+类替换	    | yes | yes | no | no
+So替换	    | yes | no | no | no
+资源替换    | yes | yes | no | no
+全平台支持  | yes | yes | yes | yes
+即时生效    | no | no | yes | yes
+性能损耗    | 较小 | 较大 | 较小 | 较小
+补丁包大小  | 较小 | 较大 | 一般 | 一般
+开发透明    | 	yes | yes | no | no
+复杂度	    | 较低 | 较低 | 复杂 | 复杂
+gradle支持  | 	yes | no | no | no
+Rom体积	    | 较大 | 较小 | 较小 | 较小
+成功率	    | 较高 | 较高 | 一般 | 最高
+
+参照上述表格，在做技术选型时，  
+
+只用做 bug 修复，可采用美团的 Robust 方案，成功率高，损耗小，兼容效果好。
+对于需要新增功能场景，需要新增变量与类时，Robust就无法满足了。
+
+其他场景，基本上都直接采用 Tinker 方案，  
+Tinker热补丁方案不仅支持类、So以及资源的替换，它还是2.X－8.X(1.9.0以上支持8.X)的全平台支持。利用Tinker我们不仅可以用做bugfix,甚至可以替代功能的发布。Tinker已运行在微信的数亿Android设备上，是目前比较理想的方案选择。
+
+其他方案缺点也比较明显：
++ Qzone 它主要问题是插桩带来Dalvik的性能问题，以及为了解决Art下内存地址问题而导致补丁包急速增大的。特别是在Android N之后，由于混合编译的inline策略修改，对于市面上的各种方案都不太容易解决
++ AndFix 首先面临的是稳定性与兼容性问题，更重要的是它无法实现类替换，它是需要大量额外的开发成本的
+
+### 实现原理
+对于热修复方案原理的理解，需要具备以下知识前提，
+
++ JAVA的类加载机制
++ 理解Java反射
++ Android类加载机制
+
+之前已经了解了Android类加载机制，知道在 DexPathList 里有个 dexElements 的数组。热修复就是利用dexElements的顺序来做文章，当一个补丁的 patch.dex 放到了dexElements 的第一位，那么当加载一个 bug 类时，发现在 patch.dex 中，则直接加载这个类，原来的 bug 类可能就被覆盖了
+
+看下 PathClassLoader，其实跟 DexClassLoader 很类似，我们挑核心的代码讲，PathClassLoader 继承关系如下，
+```
+    |- PathClassLoader
+    |-- BaseDexClassLoader
+    |--- ClassLoader
+
+    public class BaseDexClassLoader extends ClassLoader {
+        private final DexPathList pathList;
+ 
+        public BaseDexClassLoader(String dexPath, File optimizedDirectory,
+                String libraryPath, ClassLoader parent) {
+            super(parent);
+            // 也是在此处初始化 DexPathList 列表，初始化 dexElements
+            this.pathList = new DexPathList(this, dexPath, libraryPath, optimizedDirectory);
+        }
+    
+        @Override
+        protected Class<?> findClass(String name) throws ClassNotFoundException {
+            List<Throwable> suppressedExceptions = new ArrayList<Throwable>();
+            Class c = pathList.findClass(name, suppressedExceptions);
+            if (c == null) {
+                ClassNotFoundException cnfe = new ClassNotFoundException("Didn't find class \"" + name + "\" on path: " + pathList);
+                for (Throwable t : suppressedExceptions) {
+                    cnfe.addSuppressed(t);
+                }
+                throw cnfe;
+            }
+            return c;
+        }
+        
+    }
+```
+同 Android 类加载机制一致，最后也是调用 DexFile 类的 loadClassBinaryName 方法返回 Class 实例。
+因此，不难得出，热修复的实现思路：
+1. ClassLoader 通过 DexPathList 遍历成员变量 dexElements数组,
+2. 然后加载这个数组中的dex文件.
+3. 在加载到正确的类之后, 就不会再去加载有 bug 的旧类了, 我们把这个正确的类放在Dex文件中, 让这个 dex 文件排在 dexElements 数组前面即可.
+
+### Robust 更新原理
+
+Robust是美团点评团队在2017年3月开源的热修复框架，和阿里的AndFix不同，Robust不用依赖JNI层，直接通过Java层代码就可以实现热修复。相比于其他热修复框架，官方给出Robust的优势有以下几点
+
+1. 支持Android2.3-7.X版本
+2. 高兼容性、高稳定性，修复成功率高达三个九
+3. 补丁下发立即生效，不需要重新启动
+4. 支持方法级别的修复，包括静态方法
+5. 支持增加方法和类
+6. 支持ProGuard的混淆、内联、优化等操作
+7. 不接触JNI层，Robust是如何添加方法与类、立即生效其补丁的呢？
+
+Robust一共分为四个模块，分别为：
+
++ AutoPatchBase（热补丁基类）
++ gradle-plugin（负责apk包的插桩）
++ auto-patch-plugin（负责提取制作patch包）
++ patch（负责补丁包的补丁工作）
+
+来看看各个模块都是什么？
+
+#### AutoPatchBase
+作为热补丁的基类，主要类是有几个：
+
++ 2个注解分别为@Add（添加新的类）和@Modify（修改当前类的方法）
++ 一个 Constant 类用来保存固定的字符串
++ 一个 ChangeQuickRedirect 接口，用来给 plugin 确认当前类是否需要 patch
+
+#### Gradle-Plugin
+用于插桩的工具。首先进行对Apk检查防止包被篡改，然后在 RobustTransform.groovy 中
+
+1. 执行apply()方法，读取项目目录下的robust.xml加载热补丁的配置
+2. 进入transform()方法，依次读取 bootClasspath 下的所有 class 文件并加入 ClassPool 中
+3. 进入 insertRobustCode 方法，然后做了以下几件微小的工作：
+    1. 将class设置为public
+    2. 当class为接口/无方法类时，执行5
+    3. 给class插入一个public static的ChangeQuickRedirect对象
+    4. 对所有方法使用Javassist插入代码：当该方法的changeQuickRedirect不为空时，将参数直接传入PatchProxy的accessDispatchVoid/accessDispatch方法并返回， 这样做跳过了原方法后面的代码，从而实现了方法的替换
+5. 写入原来的class文件中
+6. 打包压缩生成apk
+
+由此，就实现了插桩的工作
+
+#### Auto-Patch-Plugin
+制作patch包的工具。主要逻辑在AutoPatchTransform.groovy中，
+
+1. 执行apply(…)方法，初始化参数
+2. 跳到transform(…)中，又做了细微的工作
+    1. 复制项目中的LIB_NAME_ARRAY中的3个jar包到./robust/文件夹下(unknown why)
+    2. 读取bootClasspath路径下的class文件并转换为CtClass对象数组
+    3. 执行打包autoPatch(…)
+        + 首先执行ReadAnnonation(…)去读取CtClass数组中的注解，然后把注解的方法/类放在Config中保存
+        + 执行ReadMapping.initMappingInfo()，读取mapping.txt将被ProGuard混淆了的类的对象还原成原来的类
+        + 通过InlineClassFactory构造新加的类
+        + 处理super的方法调用
+        + 针对每一个有补丁方法的类，使用PatchesFactory.createPatch构造出Patch实现类
+        + 使用PatchesControlFactory.createPatchesControl构造PatchControl类
+        + 使用PatchesInfoFactory.createPatchesInfo构造PatchInfo类
+        + 重新打包，优化smali
+
+#### Patch 
+在activity中，通过执行以下代码运行了补丁
+```
+    new PatchExecutor(
+        getApplicationContext(),  
+        new PatchManipulateImp(),
+        new Callback()
+    ).start();
+```
+PatchExecutor 是一个Thread的子类，通过 PatchManipulateImp 指定的路径去读patch文件，然后给 DexClassLoader 加载并读取PatchInfo，然后通过PatchInfo 中的信息获得需要补丁的类，通过反射修改其 changeQuickRedirect 对象的值，做到修改函数运行的路径
+
+#### 总结
+用一张图总结 Robust
+![](https://upload-images.jianshu.io/upload_images/12972541-28b797ef08251e81.png?imageMogr2/auto-orient/strip|imageView2/2/w/600/format/webp)
+
+说白了，热修复是利用Android Application的加载dex的规则，从中干预，从而达到修复的目的。
+
+当然原理看起来简单，其中还是有很多难点在其中，例如
+
++ 如何解决patch中涉及到的包访问权限
++ 如何解决super的问题
++ …
+
+各位对具体实现有兴趣的，可以通过解压官方demo中的补丁包，用JD-GUI来看看patch包中各种patchInfo、patchControl是如何处理的

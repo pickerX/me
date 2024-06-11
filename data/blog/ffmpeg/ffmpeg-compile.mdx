@@ -1,0 +1,357 @@
+---
+title: ffmpeg-Android so库编译
+date: 2019-11-18 11:11:15
+tags: ['ffmpeg']
+---
+
+### 编译环境
+MacOS 10.15  
+NDK：android-ndk-r20  
+FFmpeg-4.2.1  
+Android Studio 3.5.1  
+Android Studio 中采用 cmake 编译方式， ndk-build 方式请自行编码。  
+
+#### NDK环境
+NDK环境配置就比较简单, 下载，解压，配置环境变量，不啰嗦
+
+#### FFmpeg环境
+FFmpeg 官网下载 [http://ffmpeg.org/download.html](http://ffmpeg.org/download.html) 解压
+
+yasm是汇编编译器，ffmpeg为了提高效率使用了汇编指令，如MMX和SSE等，FFMpeg编译时需要用到
+两种方式处理：
+
+1. 使用 Homebrew 安装
+    
+        brew instal yasm
+    
+2. yasm官网下载 [http://yasm.tortall.net/](http://yasm.tortall.net/) source code
+    解压后，编译
+    
+        ./configure
+        make
+        sudo make install
+
+### 编译
+
+环境ok后，cd 到 FFmpeg 解压的目录，先执行一次
+    
+    ./configure
+    
+编译C++代码生成一些必要的文件，后续的so编译需要用到。
+然后，新建 build_android.sh 脚本文件，配置所需要的模块和开启的功能。同时还需要配置C++的编译器，之前的版本配置的交叉编译的工具，FFmpeg4.2.1 版本使用的是 clang 编译器。
+
+如下脚本是我用的编译脚本，可自行修改(没有引入x264)
+```
+    make clean
+    NDK=/Users/Picker/tools/android-ndk-r20
+
+    ANDROID_ARMV5_CFLAGS="-march=armv5te" 
+    ANDROID_ARMV7_CFLAGS="-march=armv7-a"
+    ANDROID_ARMV8_CFLAGS="-march=armv8-a" 
+    ANDROID_X86_CFLAGS="-march=i686"
+    # 虽然官网建议 -mtune=intel -mssse3 -mfpmath=sse -m32 参数
+    # 但编译时会异常，无法识别参数
+    ANDROID_X86_64_CFLAGS="-march=x86-64"
+
+    SYSROOT=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/sysroot
+    TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin
+    # shell脚本 \ 换行导致 command not found异常，存放在字符串中则ok
+    DISABLES="
+        --disable-encoders \
+        --disable-decoders \
+        --disable-avdevice \
+        --disable-static \
+        --disable-doc \
+        --disable-ffplay \
+        --disable-network \
+        --disable-doc \
+        --disable-symver \
+        --disable-ffprobe"
+
+    ENABLES="
+        --enable-neon \
+        --enable-shared \
+        --enable-gpl \
+        --enable-pic \
+        --enable-jni \
+        --enable-pthreads \
+        --enable-mediacodec \
+        --enable-encoder=aac \
+        --enable-encoder=gif \
+        --enable-encoder=libopenjpeg \
+        --enable-encoder=libmp3lame \
+        --enable-encoder=libwavpack \
+        --enable-encoder=mpeg4 \
+        --enable-encoder=pcm_s16le \
+        --enable-encoder=png \
+        --enable-encoder=mjpeg \
+        --enable-encoder=srt \
+        --enable-encoder=subrip \
+        --enable-encoder=yuv4 \
+        --enable-encoder=text \
+        --enable-decoder=aac \
+        --enable-decoder=aac_latm \
+        --enable-decoder=libopenjpeg \
+        --enable-decoder=mp3 \
+        --enable-decoder=mpeg4_mediacodec \
+        --enable-decoder=pcm_s16le \
+        --enable-decoder=flac \
+        --enable-decoder=flv \
+        --enable-decoder=gif \
+        --enable-decoder=png \
+        --enable-decoder=srt \
+        --enable-decoder=xsub \
+        --enable-decoder=yuv4 \
+        --enable-decoder=vp8_mediacodec \
+        --enable-decoder=h264_mediacodec \
+        --enable-decoder=hevc_mediacodec \
+        --enable-bsf=aac_adtstoasc \
+        --enable-bsf=h264_mp4toannexb \
+        --enable-bsf=hevc_mp4toannexb \
+        --enable-bsf=mpeg4_unpack_bframes"
+
+    configure(){
+        # 获取CPU架构
+        CPU=$1
+        # 最终的库生成位置
+        PREFIX=$(pwd)/android/$CPU
+        echo "PREFIX=$PREFIX"
+
+        HOST=""
+        CC=""
+        CCX=""
+        STRIP=""
+        ARCH=""
+        CFLAGS=""
+        if [ "$CPU" == "armv7-a" ]
+        then
+            ARCH="arm"
+            HOST=arm-linux
+            CC="$TOOLCHAIN/armv7a-linux-androideabi21-clang"
+            CCX="$TOOLCHAIN/armv7a-linux-androideabi21-clang++"
+            STRIP="$TOOLCHAIN/arm-linux-androideabi-strip"
+            CFLAGS=$ANDROID_ARMV7_CFLAGS
+        elif [ "$CPU" == "arm64" ]
+        then
+            ARCH="aarch64"
+            HOST=aarch64-linux
+            CC="$TOOLCHAIN/aarch64-linux-android21-clang"
+            CCX="$TOOLCHAIN/aarch64-linux-android21-clang++"
+            STRIP="$TOOLCHAIN/aarch64-linux-android-strip"
+            CFLAGS=$ANDROID_ARMV8_CFLAGS
+        elif [ "$CPU" == "x86_64" ]
+        then
+            ARCH="x86_64"
+            HOST=x86_64-linux
+            CC="$TOOLCHAIN/x86_64-linux-android21-clang"
+            CCX="$TOOLCHAIN/x86_64-linux-android21-clang++"
+            STRIP="$TOOLCHAIN/x86_64-linux-android-strip"
+            CFLAGS=$ANDROID_X86_64_CFLAGS
+        else
+            ARCH="i686"
+            HOST=x86-linux
+            # 编译器要用 i686-linux-android24-clang 的版本，避免寄存器异常
+            CC="$TOOLCHAIN/i686-linux-android24-clang"
+            CCX="$TOOLCHAIN/i686-linux-android24-clang++"
+            STRIP="$TOOLCHAIN/i686-linux-android-strip"
+            CFLAGS=$ANDROID_X86_CFLAGS
+        fi
+
+        ./configure \
+        --prefix=$PREFIX \
+        --toolchain=clang-usan \
+        --enable-cross-compile \
+        --target-os=android \
+        --arch=$ARCH \
+        --sysroot=$SYSROOT \
+        --cc=$CC \
+        --cxx=$CCX \
+        --strip=$STRIP \
+        --extra-cflags=$CFLAGS \
+        $DISABLES \
+        $ENABLES
+    }
+
+    build() {
+        # 构建多种CPU架构
+        make clean
+        # 引入命令参数
+        cpu=$1
+        echo "build $cpu"
+
+        configure $cpu
+        make -j8
+        make install
+    }
+
+    # 执行 build 函数
+    build arm64
+    build armv7-a
+    # build x86_64
+    # build x86
+```
+__其中 x86 x86_64 cpu 架构设备市面上已经比较少了，可以选择不编译。同时4.2.1的FFmpeg 使用 x86 相关的编译器编译时会报错，无法正确生成动态库，官方代码的问题，等待修复。__
+
+这部分脚本，可以执行 ./configure -h, 学习如何配置我们所需要的参数，当然了也可以直接查看 FFmpeg 的 configure 脚本代码
+```
+    ➜  ffmpeg-4.2.1 ./configure -h
+    Usage: configure [options]
+    Options: [defaults in brackets after descriptions]
+
+    Help options:
+      --help                   print this message
+      --quiet                  Suppress showing informative output
+      --list-decoders          show all available decoders
+      --list-encoders          show all available encoders
+      --list-hwaccels          show all available hardware accelerators
+      --list-demuxers          show all available demuxers
+      --list-muxers            show all available muxers
+      --list-parsers           show all available parsers
+      --list-protocols         show all available protocols
+      --list-bsfs              show all available bitstream filters
+      --list-indevs            show all available input devices
+      --list-outdevs           show all available output devices
+      --list-filters           show all available filters
+```
+首次编译的时候，建议把 make 与 make install 注释掉，第一次执行 build_android.sh 脚本容易出现错误，比如语法错误等等，成功后可去掉注释简化编译。      
+保存后执行，
+```
+    ./build_android.sh
+```
+无异常后，执行    
+```
+    make
+    make install
+```
+成功后即可在 ffmpeg目录下发现多了一个 android 文件夹，lib内容大致如下，则我们的编译成功了
+```
+    ➜  ffmpeg-4.2.1 ls android/armv7-a/lib
+    libavcodec.so    libavformat.so   libpostproc.so   libswscale.so
+    libavfilter.so   libavutil.so     libswresample.so pkgconfig
+```
+    
+### 应用到 Android 项目
+
+得到 so 包后，我们就要开始使用了。在使用之前，我们还需要修改 gradle 配置，添加 ndk支持。
+ndk支持，打开 project 的 Module Settings-> SDK Location 里选择你的NDK目录
+#### 修改 gradble
+defaultConfig{} 里配置如下
+```
+    externalNativeBuild {
+            cmake {
+                // C++11支持
+                cppFlags "-std=c++11"
+            }
+
+            ndk {
+                // cpu架构过滤
+                abiFilters "armeabi-v7a", "arm64-v8a"
+            }
+        }
+        sourceSets {
+            main {
+                // 设置 jni so库的目录
+                jniLibs.srcDirs = ['libs']
+            }
+        }
+```
+在 android {} 里配置 cmake 版本    
+```
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.10.2"
+        }
+    }
+```
+然后在工程 app 目录下新建 libs/arm64-v8a 等相关文件夹，用来存放各个版本的so 库，目录结构大致如下
+```
+    -app
+        -libs
+            -arm64-v8a
+                libavcodec.so
+                libavfilter.so
+                libavformat.so
+                libavutil.so
+                libpostproc.so
+                libswresample.so
+                libswscale.so
+            -armeabi-v7a
+                libavcodec.so
+                libavfilter.so
+                libavformat.so
+                libavutil.so
+                libpostproc.so
+                libswresample.so
+                libswscale.so
+```
+除了 so 库外，我们还需要头文件用来 include。这里我是存放在 main->cpp>src->ffmpeg 目录下，c代码放在统一的地方，比较好管理。相关缺失的目录需要自行建立
+```
+    -src
+    -androidTest
+    -main
+        -cpp
+            -src
+            CMakeLists.txt
+            ffmpegMgr.cpp
+                -ffmpeg
+                    -libavcodec
+                    -libavfilter
+                    -libavformat
+                    -libavutil
+                    -libpostproc
+                    -libswresample
+                    -libswscale
+```
+这样，引入的操作算是基本完成了。
+
+CMakeLists.txt 是我们的 cmake 编译脚本， ffmpegMgr.cpp是我们的JNI接口实现文件。
+
+#### cmake 编译
+```
+cmake_minimum_required(VERSION 3.4.1)
+```
+#### 添加 ffmpeg so 库
+
+不多废话，直接贴脚本代码看注释了。要查用法的，就到 cmake 官网查看文档即可
+```
+    # 添加 so动态库，以 imported 的方式
+    add_library(avcodec SHARED IMPORTED)
+    add_library(avfilter SHARED IMPORTED)
+    add_library(avformat SHARED IMPORTED)
+    
+    # 设置 target 属性，即名为 avcodec 动态库的属性 IMPORTED_LOCATION
+    # 路径是 xxx/libavcodec.so
+    set_target_properties(avcodec
+            PROPERTIES IMPORTED_LOCATION
+            # CMAKE_SOURCE_DIR cmake项目的根目录，这里即项目app目录下
+            # ANDROID_ABI 即我们 gradle里配置的 cpu 架构
+            ${CMAKE_SOURCE_DIR}/libs/${ANDROID_ABI}/libavcodec.so)
+    set_target_properties(avfilter
+            PROPERTIES IMPORTED_LOCATION
+            ${CMAKE_SOURCE_DIR}/libs/${ANDROID_ABI}/libavfilter.so)
+    set_target_properties(avformat
+            PROPERTIES IMPORTED_LOCATION
+            ${CMAKE_SOURCE_DIR}/libs/${ANDROID_ABI}/libavformat.so)
+    
+    # 查找 NDK自带的动态库或静态库 log
+    find_library(log-lib log)
+
+    # 最后，添加动态库 ffmpeg-lib，让 java 层调用
+    add_library(ffmpeg-lib SHARED ffmpegMgr.cpp)
+    # 添加 include 的头文件一起打包到apk中，不然会找不到头文件的异常
+    target_include_directories(ffmpeg-lib PRIVATE
+            # CMAKE_CURRENT_SOURCE_DIR 当前 cmke 文件的目录即 cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/ffmpeg)
+    # 最后 link 依赖的动态库，静态库
+    target_link_libraries(ffmpeg-lib
+            avcodec
+            avfilter
+            avformat
+            avutil
+            postproc
+            swresample
+            swscale
+            ${log-lib})
+```
+至此引入 FFmpeg 就结束了

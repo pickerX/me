@@ -1,0 +1,213 @@
+---
+title: Android 各版本迭代差异
+date: 2021-12-10 13:26:19
+tags: ['Android']
+---
+作为一个 Android 开发者，了解Android 系统各个版本的变更，是再基础不过的要求了。毕竟，适配也是我们日常的工作之一，  
+面试时面试官也喜欢问类似的题目。
+
+## Android 12
+Android 12 API 31
+### 行为变更
++ 用户体验
+    + 拉伸滚动效果
+    + 应用启动画面
+    + 网络 intent 解析
+    + 沉浸模式下的手势导航改进
+    + Display#getRealSize 和 getRealMetrics：废弃和限制
+    + 多窗口模式下的所有应用
+    + 大屏设备上的相机预览
+    + 前台服务通知的用户体验延迟
++ 性能
+    + 受限应用待机模式存储分区
++ 安全和隐私设置
+    + 麦克风和摄像头切换开关
+    + 麦克风和摄像头指示标志
+    + 权限软件包可见性
+    + 移除了 BouncyCastle 实现
+    + 剪贴板访问通知
+    + 应用无法关闭系统对话框
+    + 不受信任的触摸事件被屏蔽
++ activity 生命周期
+    + 按下“返回”按钮时，不再 finish 根启动器 activity
++ 图形和图片
+    + 改进了刷新率切换    
+
+## Android 11
+Android 11 API 30
+### 行为变更
+
++ 隐私设置
+    + 单次授权：让用户可以选择授予更多对位置信息、麦克风和摄像头的临时访问权限。
+    + 权限对话框的可见性：一再拒绝某项权限表示用户希望“不再询问”。
+    + 数据访问审核：深入了解您的应用在何处访问私密数据，无论是在您的应用自己的代码中，还是在依赖库的代码中。
+    + 系统提醒窗口权限：根据请求自动向某些类型的应用授予 SYSTEM_ALERT_WINDOW 权限。此外，包含 ACTION_MANAGE_OVERLAY_PERMISSION intent 操作的 intent 始终会将用户转至系统设置中的屏幕。
+    + 永久 SIM 卡标识符：在 Android 11 及更高版本中，使用 getIccId() 方法访问不可重置的 ICCID 受到限制。该方法会返回一个非 null 的空字符串。如需唯一标识设备上安装的 SIM 卡，请改用 getSubscriptionId() 方法。订阅 ID 会提供一个索引值（从 1 开始），用于唯一识别已安装的 SIM 卡（包括实体 SIM 卡和电子 SIM 卡）。除非设备恢复出厂设置，否则此标识符的值对于给定 SIM 卡是保持不变的。
++ 针对 5G 的模拟器支持
++ 性能和调试
+    + JobScheduler API 调用限制调试
+    + 文件描述符排错程序 (fdsan)
++ 非 SDK 接口限制: 反射系统隐藏或限制方法，成员等将出现不可预期的异常
+
+### 重大隐私权限变更
+
+#### 强制执行分区存储机制
+以 Android 11 或更高版本为目标平台的应用始终会受分区存储行为的影响  
+以 Android 11 或更高版本为目标平台的应用，以及以 Android 10 为目标平台且未将 requestLegacyExternalStorage 设为 true 以停用分区存储的应用  
+更新您的应用以使用分区存储[详细了解分区存储变更](https://developer.android.google.cn/about/versions/11/privacy/storage?hl=zh_cn)
+
+#### 单次授权
+使用单次授权功能，用户可以授予对位置信息、麦克风和摄像头的临时访问权限  
+在 Android 11 或更高版本上运行且请求位置信息、麦克风或摄像头权限的应用  
+在尝试访问受某项权限保护的数据之前，检查您的应用是否具有该权限
+[遵循请求权限方面的最佳做法](https://developer.android.google.cn/training/permissions/requesting?hl=zh_cn)
+
+#### 自动重置权限
+如果用户在 Android 11 或更高版本上几个月未与应用互动，系统会自动重置应用的敏感权限  
+
+以 Android 11 或更高版本为目标平台且在后台执行大部分工作的应用  
+要求用户阻止系统重置应用的权限[详细了解自动重置权限]()
+
+#### 后台位置信息访问权限
+Android 11 更改了用户向应用授予后台位置信息权限的方式	  
+
+以 Android 11 或更高版本为目标平台且需要在[后台访问位置信息的应用](https://developer.android.google.cn/training/location/permissions?hl=zh_cn#background)  
+
+通过对权限请求方法的多次单独调用，逐步请求在前台（粗略或精确）和后台访问位置信息的权限。必要时，说明用户授予该权限所能得到的益处  
+[详细了解 Android 11 中的在后台访问位置信息的权限](https://developer.android.google.cn/training/location/permissions?hl=zh_cn#background)
+
+#### 软件包可见性
+
+Android 11 更改了应用查询同一设备上的其他已安装应用及与之互动的方式  
+
+以 Android 11 或更高版本为目标平台且与设备上的其他已安装应用交互的应用  
+
+将 ``` <queries>``` 元素添加到应用的清单  
+
+[详细了解软件包可见性](https://developer.android.google.cn/about/versions/11/privacy/package-visibility?hl=zh_cn)
+
+#### 前台服务
+Android 11 更改了前台服务访问位置信息、摄像头和麦克风相关数据的方式	  
+
+在 Android 11 或更高版本上运行且在前台服务中访问位置信息、摄像头或麦克风的应用  
+
+分别针对需要访问摄像头和麦克风的前台服务，声明 camera 和 microphone 前台服务类型。但请注意，应用在后台运行时启动的前台服务通常无法访问位置信息、摄像头或麦克风。
+
+详细了解前台服务的变更
+
+## Android 10
+Android 10 API 29 
+
++ 限制非 SDK 接口
++ 手势导航
++ NDK
+    + 共享对象不得包含文本重定位
+    + Bionic 库和动态链接器路径变更
+    + 系统二进制文件/库会映射到只执行内存
++ WLAN 直连广播
++ WLAN 感知功能
++ 应用使用情况
+
++ 可折叠设备
++ 5G 网络
++ 通知中的智能回复
++ 深色主题
+
+## Android 9
+Android 9.0 API 28 Pie
+
++ 利用 Wi-Fi RTT 进行室内定位
++ 显示屏缺口支持
++ 通知
++ 多摄像头支持和摄像头更新
++ 适用于可绘制对象和位图的 ImageDecoder
++ 动画：引入了 AnimatedImageDrawable 类，用于绘制和显示 GIF 和 WebP 动画图像
++ HDR VP9 视频、HEIF 图像压缩和 Media API
++ JobScheduler 中的流量费用敏感度
++ Neural Networks API 1.1
+
+## Android 8
+Android 8.0 API 26 Oreo 
+
+### 行为变更
+
++ 后台执行限制
++ Android 后台位置限制
++ 应用快捷键
++ 语言区域和国际化
++ 通知
+    + 提醒窗口： TYPE_APPLICATION_OVERLAY 窗口
+    + 引入了通知渠道
++ 输入和导航
++ 网页表单自动填充
++ 网络连接和 HTTP(S) 连接
++ 安全性
++ 隐私性
++ 记录未捕获的异常
+
+
+## Android 7
+Android 7.0 API 24 Nougat.
+Android 7.0 提供新功能以提升性能、生产效率和安全性。通过新的系统行为测试您的应用，以节省电量和内存。充分利用多窗口 UI、直接回复通知等功能。
+
++ 电池和内存
+    + 低电耗模式：增强了低电耗模式
+    + Project Svelte：后台优化，移除了三项隐式广播，以帮助优化内存使用和电量消耗
++ 权限更改    
+    + 系统权限更改：私有目录被限制访问
++ NDK 应用链接至平台库    
+
+## Android 6
+Android 6.0 API 23 Marshmallow。主要变更如下
+### 行为变更
++ __运行时权限__
++ __低电耗模式和应用待机模式__
++ 取消支持 Apache HTTP 客户端
++ BoringSSL 
++ 硬件标识符访问权
++ 通知
++ 音频管理器变更：不再支持通过 AudioManager 类直接设置音量或将特定音频流静音
++ 文本选择
++ WLAN 和网络连接变更
+
+### API 变更
++ 【新增】指纹身份验证
++ 【新增】确认凭据
++ 应用链接
++ 【更新】直接共享
++ 语音交互
++ Assist API
++ 可采用的存储设备
++ 4K 显示模式
++ 主题化 ColorStateList
++ 音频功能
++ 视频功能
++ Android for Work
+
+详细移步 [传送门](https://developer.android.google.cn/about/versions/marshmallow/android-6.0?hl=zh_cn)
+
+## Android 5
+Android 5.1 API 22 Lollipop。 Android 5.x 是 Android 的一次大变更，主要有
+
++ Material Design
++ 通知管理：浮动通知等
++ Android Runtime (ART)
++ 高级连接
+    + 蓝牙BLE
+    + 多网络功能
+    + NFC
++ 高性能图像，支持 Khronos OpenGL ES 3.1 
++ 相机：全新的 Camera API
++ 更强大的音频功能：全新的音频采集设计可提供低延迟音频输入
++ 屏幕采集和共享
++ 新的传感器类型
+    + 倾斜检测器
+    + 心率传感器
+    + 互动复合传感器：现在可以检测“唤醒”手势、“拿起”手势和“扫视”手势等特殊交互
++ Chromium WebView
++ 引入对 64位系统的支持
++ 显示绑定服务
+
+Android 5.1，变更
++ 多 SIM 卡支持
++ 弃用的 HTTP 类：URLConnection 代替 AndroidHttpClient 等

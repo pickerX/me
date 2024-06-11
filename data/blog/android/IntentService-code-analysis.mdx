@@ -1,0 +1,97 @@
+---
+title: IntentService源码分析
+date: 2019-01-02 19:57:15
+tags: ['Android']
+---
+
+IntentService跟HandlerThread一样，也是Google为了方便开发者使用Service封装的一个类。
+### 特点
+1. 通过Context的startService(Intent)，创建一个工作线程处理异步请求  
+2. 异步的，串行处理每个Intent请求，处理完后自行停止Service
+
+不瞎bb了，源码能解释一下
+
+### 源码分析
+先看一下构造和成员属性，
+
+```
+public abstract class IntentService extends Service {
+    private volatile Looper mServiceLooper;
+    private volatile ServiceHandler mServiceHandler;
+    private String mName;
+    private boolean mRedelivery;
+
+     /**
+     * Creates an IntentService.  Invoked by your subclass's constructor.
+     *
+     * @param name Used to name the worker thread, important only for debugging.
+     */
+    public IntentService(String name) {
+        super();
+        mName = name;
+    }
+```
+IntentService继承Service，被声明为 abstract class, 所以我们只能继承该类，不能直接使用。
+有几个比较重要的成员属性Looper和ServiceHandler。Looper的作用我们就不啰嗦了，前面的文章已经介绍过了。  
+ServiceHandler是IntentService里的一个内部类，继承Handler，实际用来处理Intent请求的方式。子类重写onHandleIntent(Intent)处理Intent，之后调用stopSelf停止Service。
+
+```
+ private final class ServiceHandler extends Handler {
+    public ServiceHandler(Looper looper) {
+        super(looper);
+    }
+
+    @Override
+    public void handleMessage(Message msg) {
+        onHandleIntent((Intent)msg.obj);
+        stopSelf(msg.arg1);
+    }
+}
+```
+没错，聪明的你看到这里也大致猜到了，IntentSeries内部其实就是使用Handler，Looper的机制，异步处理Intent请求的。不过，我们还得继续分析源码，因为还有内容值得我们学习。
+
+按Service的生命周期来看，会先调用onCreate
+
+```
+    @Override
+    public void onCreate() {
+        // TODO: It would be nice to have an option to hold a partial wakelock
+        // during processing, and to have a static startService(Context, Intent)
+        // method that would launch the service & hand off a wakelock.
+
+        super.onCreate();
+        HandlerThread thread = new HandlerThread("IntentService[" + mName + "]");
+        thread.start();
+
+        mServiceLooper = thread.getLooper();
+        mServiceHandler = new ServiceHandler(mServiceLooper);
+    }
+```
+这里创建了一个HandlerThread和一个ServiceHandler，并将HandlerThread里的Looper传给ServiceHandler，是不是挺熟悉的？ 恩，就是我们上个章节对HandlerThread的介绍里面的内容，这里就不多废话了。
+
+接下来我们继续看 onStart，onStartCommand方法
+```
+@Override
+public void onStart(Intent intent, int startId) {
+    Message msg = mServiceHandler.obtainMessage();
+    msg.arg1 = startId;
+    msg.obj = intent;
+    mServiceHandler.sendMessage(msg);
+}
+
+@Override
+public int onStartCommand(Intent intent, int flags, int startId) {
+    onStart(intent, startId);
+    return mRedelivery ? START_REDELIVER_INTENT : START_NOT_STICKY;
+}
+```
+最终调用的是onStart方法， 从mServiceHandler里obtain一条Message， 将startId和Intent通过Handler传递给Looper，MessageQueue。 根据Handler的机制处理消息，在IntentService destroy的时候也将Looper停止。
+```
+@Override
+public void onDestroy() {
+    mServiceLooper.quit();
+}
+```
+所以，我们在使用IntentService的时候，只需要继承IntentService，并重写onHandleIntent方法，在需要的使用通过Content startService发送一个异步请求就可以了。
+
+

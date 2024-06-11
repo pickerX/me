@@ -1,0 +1,697 @@
+---
+title: Launcher3桌面加载流程分析-2
+date: 2018-10-03 9:59:46
+tags: ['Android', 'Launcher',]
+---
+
+上文[Launcher3 桌面加载流程分析(上)](http://www.jianshu.com/p/3e918982e5c6)，我们看到
+LauncherModel 创建LoaderTask加载数据，我们继续往下看
+
+
+### LoaderTask
+
+创建LoaderTask，flags为 PagedView.INVALID_RESTORE_PAGE值-1001, 我们看它的run方法是如何执行的。
+```
+    private class LoaderTask implements Runnable {
+    
+        LoaderTask(Context context, int flags) {
+            mContext = context;
+            mFlags = flags;
+        }
+
+        public void run() {
+            
+            
+            keep_running: {
+                if (DEBUG_LOADERS) Log.d(TAG, "step 1: loading workspace");
+                loadAndBindWorkspace();
+
+                if (mStopped) {
+                    break keep_running;
+                }
+
+                waitForIdle();
+
+                // second step
+                if (DEBUG_LOADERS) Log.d(TAG, "step 2: loading all apps");
+                loadAndBindAllApps();
+            }
+            
+        }
+    }
+```
+根据mStopped的状态做一些预先的判断外，最先执行的是 loadAndBindWorkspace()方法,加载和绑定Workspace的数据，包括屏幕数，应用数据，widget组件信息等等，然后调用waitForIdle() 等待loadAndBindWorkspace()里创建的一些子线程执行完，修改mStopped和mLoadAndBindStepFinished的状态后执行loadAndBindAllApps()，加载所有应用，完成整个加载应用的流程。  
+整体流程就是上面的run方法，具体的细节我们一步步来看。
+
+### Workspace
+Workspace是什么呢？大家自己看下Launcher3的主布局文件launcher.xml布局就很明了，workspace是Launcher的工作台，承载应用数据，widget组件数据，文件夹数据以及其他的功能。  
+
+加载workspace的流程分两步，
+
+1. 加载数据，loadWorkspace()
+2. 绑定workspace， bindWorkspace()
+
+流程如下
+```
+    private void loadAndBindWorkspace() {
+        mIsLoadingAndBindingWorkspace = true;        
+        // Load the workspace
+        if (DEBUG_LOADERS) {
+            Log.d(TAG, "loadAndBindWorkspace mWorkspaceLoaded=" + mWorkspaceLoaded);
+        }
+
+        if (!mWorkspaceLoaded) {
+            loadWorkspace();
+            synchronized (LoaderTask.this) {
+                if (mStopped) {
+                    return;
+                }
+                mWorkspaceLoaded = true;
+            }
+        }
+
+        // Bind the workspace
+        bindWorkspace(-1);
+    }
+```
+
+#### 加载WorkSpace数据
+加载WorkSpace数据的方法都在loadWorkSpace()里, 这个步骤是整个流程最核心的，虽然只有loadWorkSpace()这个方法，但是我目前的这个版本该方法的源码就达到600多行，所以我们截取核心的代码来分析，很多细节还是要大家自己去琢磨。
+```
+    final long t = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
+
+    final Context context = mContext;
+    final ContentResolver contentResolver = context.getContentResolver();
+    final PackageManager manager = context.getPackageManager();
+    final boolean isSafeMode = manager.isSafeMode();
+    final LauncherAppsCompat launcherApps = LauncherAppsCompat.getInstance(context);
+    final boolean isSdCardReady = context.registerReceiver(null,
+            new IntentFilter(StartupReceiver.SYSTEM_READY)) != null;
+
+    LauncherAppState app = LauncherAppState.getInstance();
+    InvariantDeviceProfile profile = app.getInvariantDeviceProfile();
+    int countX = profile.numColumns;
+    int countY = profile.numRows;
+
+    if (GridSizeMigrationTask.ENABLED &&
+            !GridSizeMigrationTask.migrateGridIfNeeded(mContext)) {
+        // Migration failed. Clear workspace.
+        mFlags = mFlags | LOADER_FLAG_CLEAR_WORKSPACE;
+    }
+
+    if ((mFlags & LOADER_FLAG_CLEAR_WORKSPACE) != 0) {
+        Launcher.addDumpLog(TAG, "loadWorkspace: resetting launcher database", true);
+        LauncherAppState.getLauncherProvider().deleteDatabase();
+    }
+
+    if ((mFlags & LOADER_FLAG_MIGRATE_SHORTCUTS) != 0) {
+        // append the user's Launcher2 shortcuts
+        Launcher.addDumpLog(TAG, "loadWorkspace: migrating from launcher2", true);
+        LauncherAppState.getLauncherProvider().migrateLauncher2Shortcuts();
+    } else {
+        // Make sure the default workspace is loaded
+        Launcher.addDumpLog(TAG, "loadWorkspace: loading default favorites", false);
+        LauncherAppState.getLauncherProvider().loadDefaultFavoritesIfNecessary();
+    }
+```
+首先声明了一些核心对象，ContentResolver，LauncherAppsCompat, LauncherAppState,InvariantDeviceProfile这些上一篇已经有介绍过就不再赘述。  
+前几个if条件，是关于数据库移植的，比如Lacuncher2，升级到Launcher3，桌面图标大小发生变化的特殊场合处理，不是我们需要特别留意的。 
+ 
+##### 加载WorkSpace资源文件
+关键的代码是 LauncherAppState.getLauncherProvider().loadDefaultFavoritesIfNecessary(); 在首次打开Launcher时，会加载默认的数据，比如桌面首页显示什么内容，hotseat配置等等。看LauncherAppState代码发现调用的是 LauncherProvider的loadDefaultFavoritesIfNecessary方法
+```
+    /**
+        * Loads the default workspace based on the following priority scheme:
+        *   1) From the app restrictions
+        *   2) From a package provided by play store
+        *   3) From a partner configuration APK, already in the system image
+        *   4) The default configuration for the particular device
+        */
+    synchronized public void loadDefaultFavoritesIfNecessary() {
+        SharedPreferences sp = Utilities.getPrefs(getContext());
+
+        if (sp.getBoolean(EMPTY_DATABASE_CREATED, false)) {
+            Log.d(TAG, "loading default workspace");
+
+            AutoInstallsLayout loader = createWorkspaceLoaderFromAppRestriction();
+            if (loader == null) {
+                loader = AutoInstallsLayout.get(getContext(),
+                        mOpenHelper.mAppWidgetHost, mOpenHelper);
+            }
+            if (loader == null) {
+                final Partner partner = Partner.get(getContext().getPackageManager());
+                if (partner != null && partner.hasDefaultLayout()) {
+                    final Resources partnerRes = partner.getResources();
+                    int workspaceResId = partnerRes.getIdentifier(Partner.RES_DEFAULT_LAYOUT,
+                            "xml", partner.getPackageName());
+                    if (workspaceResId != 0) {
+                        loader = new DefaultLayoutParser(getContext(), mOpenHelper.mAppWidgetHost,
+                                mOpenHelper, partnerRes, workspaceResId);
+                    }
+                }
+            }
+
+            final boolean usingExternallyProvidedLayout = loader != null;
+            if (loader == null) {
+                loader = getDefaultLayoutParser();
+            }
+
+            // There might be some partially restored DB items, due to buggy restore logic in
+            // previous versions of launcher.
+            createEmptyDB();
+            // Populate favorites table with initial favorites
+            if ((mOpenHelper.loadFavorites(mOpenHelper.getWritableDatabase(), loader) <= 0)
+                    && usingExternallyProvidedLayout) {
+                // Unable to load external layout. Cleanup and load the internal layout.
+                createEmptyDB();
+                mOpenHelper.loadFavorites(mOpenHelper.getWritableDatabase(),
+                        getDefaultLayoutParser());
+            }
+            clearFlagEmptyDbCreated();
+        }
+    }
+```
+正常流程不会都执行，故简单介绍一下，该方法跟注释一样，会从以下几种方式中的一种加载默认布局
+1. 应用约束，调用createWorkspaceLoaderFromAppRestriction，获取用户设置的一组用于限制应用功能的Bundle串，获取Bundle里workspace.configuration.package.name具体的应用包名，获取WorkSpace默认配置资源。
+2. 从带有 android.autoinstalls.config.action.PLAY_AUTO_INSTALL Action的应用里获取workspace默认配置资源
+3. 从系统内置的partner应用里获取workspace默认配置
+4. 调用getDefaultLayoutParser() 获取我们Launcher里的默认资源
+
+默认流程，会执行第四步, 然后创建数据库，建表favorites和workspaceScreens，加载数据mOpenHelper.loadFavorites
+```
+    private DefaultLayoutParser getDefaultLayoutParser() {
+        int defaultLayout = LauncherAppState.getInstance()
+                .getInvariantDeviceProfile().defaultLayoutId;
+        return new DefaultLayoutParser(getContext(), mOpenHelper.mAppWidgetHost,
+                mOpenHelper, getContext().getResources(), defaultLayout);
+    }
+```
+而默认的资源就是我们配置 InvariantDeviceProfile的资源如R.xml.default_workspace_5x6，详细见上一篇文章。故我们可以在res/xml/里修改我们的默认显示应用的配置。
+```
+    @Thunk 
+    int loadFavorites(SQLiteDatabase db, AutoInstallsLayout loader) {
+        ArrayList<Long> screenIds = new ArrayList<Long>();
+        // TODO: Use multiple loaders with fall-back and transaction.
+        int count = loader.loadLayout(db, screenIds);
+
+        // Add the screens specified by the items above
+        Collections.sort(screenIds);
+        int rank = 0;
+        ContentValues values = new ContentValues();
+        for (Long id : screenIds) {
+            values.clear();
+            values.put(LauncherSettings.WorkspaceScreens._ID, id);
+            values.put(LauncherSettings.WorkspaceScreens.SCREEN_RANK, rank);
+            if (dbInsertAndCheck(this, db, TABLE_WORKSPACE_SCREENS, 
+            	null, values) < 0) {
+                throw new RuntimeException("Failed initialize screen table"
+                        + "from default layout");
+            }
+            rank++;
+        }
+
+        // Ensure that the max ids are initialized
+        mMaxItemId = initializeMaxItemId(db);
+        mMaxScreenId = initializeMaxScreenId(db);
+
+        return count;
+    }
+```
+loadFavorites方法里调用DefaultLayoutParser.loadLayout(db, screenIds) 解析布局xml里的文件夹信息，应用信息，widget信息等等保存到数据库, 并获取到屏幕id集合，保存到workspaceScreens表中。至于怎么解析的，我们直接看关键的代码
+```
+    AutoInstallsLayout.java
+
+     /**
+        * Parses the layout and returns the number of elements added on the homescreen.
+        */
+    protected int parseLayout(int layoutId, ArrayList<Long> screenIds)
+            throws XmlPullParserException, IOException {
+        XmlResourceParser parser = mSourceRes.getXml(layoutId);
+        beginDocument(parser, mRootTag);
+        final int depth = parser.getDepth();
+        int type;
+        HashMap<String, TagParser> tagParserMap = getLayoutElementsMap();
+        int count = 0;
+
+        while (((type = parser.next()) != XmlPullParser.END_TAG ||
+                parser.getDepth() > depth) && type != XmlPullParser.END_DOCUMENT) {
+            if (type != XmlPullParser.START_TAG) {
+                continue;
+            }
+            count += parseAndAddNode(parser, tagParserMap, screenIds);
+        }
+        return count;
+    }
+```
+通过XmlResourceParser 解析xml文件,获取我们需要的配置。不同的标签通过不同的解析对象处理，我们使用的是AutoInstallsLayout的子类DefaultLayoutParser，在getLayoutElementsMap()方法里，我们可以看到使用的处理对象，如应用解析器ResolveParser，文件夹解析器MyFolderParser等等，解析到信息后会保存到对应的数据库中。这就是加载默认workspace的原理，解析的细节就不一一介绍了，请大家自己找到需要的解析器琢磨代码了哦
+```
+    DefaultLayoutParser.java
+
+    @Override
+    protected HashMap<String, TagParser> getLayoutElementsMap() {
+        HashMap<String, TagParser> parsers = new HashMap<String, TagParser>();
+        parsers.put(TAG_FAVORITE, new AppShortcutWithUriParser());
+        parsers.put(TAG_APPWIDGET, new AppWidgetParser());
+        parsers.put(TAG_SHORTCUT, new UriShortcutParser(mSourceRes));
+        parsers.put(TAG_RESOLVE, new ResolveParser());
+        parsers.put(TAG_FOLDER, new MyFolderParser());
+        parsers.put(TAG_PARTNER_FOLDER, new PartnerFolderParser());
+        return parsers;
+    }
+```
+我们简单的介绍一个默认配置，
+```
+    default_workspace_4x4.xml
+
+    <favorites xmlns:launcher="http://schemas.android.com/apk/res-auto">
+
+        <!-- Hotseat -->
+        <include launcher:workspace="@xml/dw_phone_hotseat" />
+
+        <!-- Bottom row -->
+        <resolve
+            launcher:screen="0"
+            launcher:x="0"
+            launcher:y="-1" >
+            <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
+            <favorite launcher:uri="mailto:" />
+        </resolve>
+
+        <resolve
+            launcher:screen="0"
+            launcher:x="1"
+            launcher:y="-1" >
+            <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_GALLERY;end" />
+            <favorite launcher:uri="#Intent;type=images/*;end" />
+        </resolve>
+
+        <resolve
+            launcher:screen="0"
+            launcher:x="3"
+            launcher:y="-1" >
+            <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MARKET;end" />
+            <favorite launcher:uri="market://details?id=com.android.launcher" />
+        </resolve>
+
+    </favorites>
+```
+1. @xml/dw_phone_hotseat, hotseat配置文件，配置规则一样
+2. resolve标签， 通过ResolveParser解析，包含内嵌标签
+3. favorite, 一个app的信息，可以指定uri，或具体的包名，类名来识别app
+4. 可以有自定义的标签，自己实现解析即可
+
+至此，loadDefaultFavoritesIfNecessary()就执行完成，我们回到LauncherModel继续看loadWorkspace()
+
+#### 读取数据
+接下来就是从数据库读取从配置文件读到的信息，根据itemType, 走switch的不同case
+```
+    final Uri contentUri = LauncherSettings.Favorites.CONTENT_URI;
+    if (DEBUG_LOADERS) Log.d(TAG, "loading model from " + contentUri);
+    final Cursor c = contentResolver.query(contentUri, null, null, null, null);
+
+    // +1 for the hotseat (it can be larger than the workspace)
+    // Load workspace in reverse order to ensure that latest items are loaded first (and
+    // before any earlier duplicates)
+    final LongArrayMap<ItemInfo[][]> occupied = new LongArrayMap<>();
+    HashMap<ComponentKey, AppWidgetProviderInfo> widgetProvidersMap = null;
+	
+	while (!mStopped && c.moveToNext()) {
+    	try {
+        	int itemType = c.getInt(itemTypeIndex);
+	        boolean restored = 0 != c.getInt(restoredIndex);
+    	    boolean allowMissingTarget = false;
+        	container = c.getInt(containerIndex);
+
+	        switch (itemType) {
+    	    case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
+        	case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
+        		
+        		
+        		sBgItemsIdMap.put(info.id, info);
+        		
+        		break;
+
+	        case LauncherSettings.Favorites.ITEM_TYPE_FOLDER:
+	        	
+		        sBgItemsIdMap.put(folderInfo.id, folderInfo);
+    			sBgFolders.put(folderInfo.id, folderInfo);
+    			
+    			break;
+    	    case LauncherSettings.Favorites.ITEM_TYPE_APPWIDGET:
+        	case LauncherSettings.Favorites.ITEM_TYPE_CUSTOM_APPWIDGET:
+		
+```
+比如 ITEM_TYPE_APPLICATION和ITEM_TYPE_SHORTCUT，执行到最后会保存到LongArrayMap sBgItemsIdMap里。而ITEM_TYPE_FOLDER，保存到LongArrayMap sBgFolders，同时也保存到sBgItemsIdMap，因为FolderInfo和应用的AppInfo，ShortcutInfo都是继承ItemInfo，后续可以转型处理。ITEM_TYPE_APPWIDGET,ITEM_TYPE_CUSTOM_APPWIDGET同理。
+
+这里的细节比较多，通常我们也不用特地修正这里的查询逻辑，故不做详细阐述。
+
+#### 绑定WorkSpace数据
+
+加载完workspace数据后，往下就是讲数据绑定到workspace，调用bindWorkspace(-1)方法。上一步我， 知道数据都保存在集合sBgWorkspaceItems，sBgAppWidgets，sBgWorkspaceScreens里，这里Google不是直接遍历里面的数据，绑定到View上。而是做了一个copy的操作，避免后续的某个线程修改全局变量影响到其他的工作线程。
+```
+    private void bindWorkspace(int synchronizeBindPage) {
+        // Save a copy of all the bg-thread collections
+        ArrayList<ItemInfo> workspaceItems = new ArrayList<ItemInfo>();
+        ArrayList<LauncherAppWidgetInfo> appWidgets =
+                new ArrayList<LauncherAppWidgetInfo>();
+        ArrayList<Long> orderedScreenIds = new ArrayList<Long>();
+
+        final LongArrayMap<FolderInfo> folders;
+        final LongArrayMap<ItemInfo> itemsIdMap;
+
+        synchronized (sBgLock) {
+            workspaceItems.addAll(sBgWorkspaceItems);
+            appWidgets.addAll(sBgAppWidgets);
+            orderedScreenIds.addAll(sBgWorkspaceScreens);
+
+            folders = sBgFolders.clone();
+            itemsIdMap = sBgItemsIdMap.clone();
+        }
+
+        final boolean isLoadingSynchronously =
+                synchronizeBindPage != PagedView.INVALID_RESTORE_PAGE;
+        int currScreen = isLoadingSynchronously ? synchronizeBindPage :
+            oldCallbacks.getCurrentWorkspaceScreen();
+        if (currScreen >= orderedScreenIds.size()) {
+            // There may be no workspace screens (just hotseat items and an empty page).
+            currScreen = PagedView.INVALID_RESTORE_PAGE;
+        }
+        final int currentScreen = currScreen;
+        final long currentScreenId = currentScreen < 0
+                ? INVALID_SCREEN_ID : orderedScreenIds.get(currentScreen);
+
+        // Load all the items that are on the current page first (and in the process, unbind
+        // all the existing workspace items before we call startBinding() below.
+        unbindWorkspaceItemsOnMainThread();
+
+        // Separate the items that are on the current screen, and all the other remaining items
+        ArrayList<ItemInfo> currentWorkspaceItems = new ArrayList<ItemInfo>();
+        ArrayList<ItemInfo> otherWorkspaceItems = new ArrayList<ItemInfo>();
+        ArrayList<LauncherAppWidgetInfo> currentAppWidgets =
+                new ArrayList<LauncherAppWidgetInfo>();
+        ArrayList<LauncherAppWidgetInfo> otherAppWidgets =
+                new ArrayList<LauncherAppWidgetInfo>();
+        LongArrayMap<FolderInfo> currentFolders = new LongArrayMap<>();
+        LongArrayMap<FolderInfo> otherFolders = new LongArrayMap<>();
+
+        filterCurrentWorkspaceItems(currentScreenId, workspaceItems, currentWorkspaceItems,
+                otherWorkspaceItems);
+        filterCurrentAppWidgets(currentScreenId, appWidgets, currentAppWidgets,
+                otherAppWidgets);
+        filterCurrentFolders(currentScreenId, itemsIdMap, folders, currentFolders,
+                otherFolders);
+        sortWorkspaceItemsSpatially(currentWorkspaceItems);
+        sortWorkspaceItemsSpatially(otherWorkspaceItems);
+        // Tell the workspace that we're about to start binding items
+        r = new Runnable() {
+            public void run() {
+                Callbacks callbacks = tryGetCallbacks(oldCallbacks);
+                if (callbacks != null) {
+                    callbacks.startBinding();
+                }
+            }
+        };
+        runOnMainThread(r);
+        Log.e(TAG, "orderedScreenIds:" + orderedScreenIds);
+    }
+```
+之后一系列filter和sort方法，将当前需要加载页的数据，按screenId排序，并填充到新的集合里. 准备工作也就完成了，然后通过 tryGetCallbacks 获取到一个Callbacks, 这个Callbacks也就是LauncherModel的mCallback，初始化是在Launcher onCreate里调用LauncherAppState.setLauncher，在LauncherModel的initialize()里完成赋值。 故，Callbacks就是我们的Launcher。  
+
+调用Launcher里实现的 startBinding(), 改变workspace的状态，移除一些旧的View和数据
+```
+	/**
+     * Refreshes the shortcuts shown on the workspace.
+     * <p>
+     * Implementation of the method from LauncherModel.Callbacks.
+     */
+    public void startBinding() {
+        setWorkspaceLoading(true);
+
+        // If we're starting binding all over again, clear any bind calls we'd postponed in
+        // the past (see waitUntilResume) -- we don't need them since we're starting binding
+        // from scratch again
+        mBindOnResumeCallbacks.clear();
+
+        // Clear the workspace because it's going to be rebound
+        mWorkspace.clearDropTargets();
+        mWorkspace.removeAllWorkspaceScreens();
+
+        mWidgetsToAdvance.clear();
+        if (mHotseat != null) {
+            mHotseat.resetLayout();
+        }
+    }
+```
+
+之后就依次开始绑定
+
+1. 绑定WorkSpace的Screen，bindWorkspaceScreens
+2. 绑定Workspace当前页的Items，包括应用信息，组件信息，bindWorkspaceItems
+3. 绑定Workspace其他页的Items
+
+bindWorkspace(int synchronizeBindPage)方法片段：
+```
+    bindWorkspaceScreens(oldCallbacks, orderedScreenIds);
+
+    // Load items on the current page
+    bindWorkspaceItems(oldCallbacks, currentWorkspaceItems, currentAppWidgets,
+            currentFolders, null);
+    if (isLoadingSynchronously) {
+        r = new Runnable() {
+            public void run() {
+                Callbacks callbacks = tryGetCallbacks(oldCallbacks);
+                if (callbacks != null && currentScreen != PagedView.INVALID_RESTORE_PAGE) {
+                    callbacks.onPageBoundSynchronously(currentScreen);
+                }
+            }
+        };
+        runOnMainThread(r);
+    }
+
+    // Load all the remaining pages (if we are loading synchronously, we want to defer this
+    // work until after the first render)
+    synchronized (mDeferredBindRunnables) {
+        mDeferredBindRunnables.clear();
+    }
+    bindWorkspaceItems(oldCallbacks, otherWorkspaceItems, otherAppWidgets, otherFolders,
+            (isLoadingSynchronously ? mDeferredBindRunnables : null));
+ ```       
+
+我们看到bindWorkspaceScreens，bindWorkspaceItems里最终调用的是
+Launcher里的回调方法，bindScreens，bindItems，bindFolders等等.  
+以 绑定Screen为例
+```
+	@Override
+    public void bindScreens(ArrayList<Long> orderedScreenIds) {
+        bindAddScreens(orderedScreenIds);
+
+        // If there are no screens, we need to have an empty screen
+        if (orderedScreenIds.size() == 0) {
+            mWorkspace.addExtraEmptyScreen();
+        }
+
+        // Create the custom content page (this call updates mDefaultScreen which calls
+        // setCurrentPage() so ensure that all pages are added before calling this).
+        if (hasCustomContentToLeft()) {
+            mWorkspace.createCustomContentContainer();
+            populateCustomContentContainer();
+        }
+    }
+
+    @Override
+    public void bindAddScreens(ArrayList<Long> orderedScreenIds) {
+        int count = orderedScreenIds.size();
+        for (int i = 0; i < count; i++) {
+     mWorkspace.insertNewWorkspaceScreenBeforeEmptyScreen(orderedScreenIds.get(i));
+        }
+    }
+```
+根据获取到Screen Id集合，调用Workspace的insertNewWorkspaceScreenBeforeEmptyScreen，
+创建相对应的CellLayout，并添加到我们的Workspace这个容器里
+```
+    public long insertNewWorkspaceScreenBeforeEmptyScreen(long screenId) {
+        // Find the index to insert this view into.  If the empty screen exists, then
+        // insert it before that.
+        int insertIndex = mScreenOrder.indexOf(EXTRA_EMPTY_SCREEN_ID);
+        if (insertIndex < 0) {
+            insertIndex = mScreenOrder.size();
+        }
+        return insertNewWorkspaceScreen(screenId, insertIndex);
+    }
+
+
+    public long insertNewWorkspaceScreen(long screenId, int insertIndex) {
+        if (mWorkspaceScreens.containsKey(screenId)) {
+            throw new RuntimeException("Screen id " + screenId + " already exists!");
+        }
+
+        // Inflate the cell layout, but do not add it automatically so that we can get the newly
+        // created CellLayout.
+        CellLayout newScreen = (CellLayout) mLauncher.getLayoutInflater().inflate(
+                        R.layout.workspace_screen, this, false /* attachToRoot */);
+
+        newScreen.setOnLongClickListener(mLongClickListener);
+        newScreen.setOnClickListener(mLauncher);
+        newScreen.setSoundEffectsEnabled(false);
+        mWorkspaceScreens.put(screenId, newScreen);
+        mScreenOrder.add(insertIndex, screenId);
+        addView(newScreen, insertIndex);
+
+        LauncherAccessibilityDelegate delegate =
+                LauncherAppState.getInstance().getAccessibilityDelegate();
+        if (delegate != null && delegate.isInAccessibleDrag()) {
+            newScreen.enableAccessibleDrag(true, CellLayout.WORKSPACE_ACCESSIBILITY_DRAG);
+        }
+        return screenId;
+    }
+```
+图标，文件夹，组件的创建流程都是类似的，类似的东西就不重复，具体细节得各位慢慢琢磨。
+
+### 加载所有应用
+
+加载完workspace后，会加载所有应用，更新应用图标。
+```
+    private void loadAndBindAllApps() {
+        if (DEBUG_LOADERS) {
+            Log.d(TAG, "loadAndBindAllApps mAllAppsLoaded=" + mAllAppsLoaded);
+        }
+        if (!mAllAppsLoaded) {
+            loadAllApps();
+            synchronized (LoaderTask.this) {
+                if (mStopped) {
+                    return;
+                }
+            }
+            updateIconCache();
+            synchronized (LoaderTask.this) {
+                if (mStopped) {
+                    return;
+                }
+                mAllAppsLoaded = true;
+            }
+        } else {
+            onlyBindAllApps();
+        }
+    }
+```
+
+加载所有应用，保存到mBgAllAppsList AllAppsList对象里。
+```
+    private void loadAllApps() {
+        final long loadTime = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
+
+        final Callbacks oldCallbacks = mCallbacks.get();
+        if (oldCallbacks == null) {
+            // This launcher has exited and nobody bothered to tell us.  Just bail.
+            Log.w(TAG, "LoaderTask running with no launcher (loadAllApps)");
+            return;
+        }
+
+        final List<UserHandleCompat> profiles = mUserManager.getUserProfiles();
+
+        // Clear the list of apps
+        mBgAllAppsList.clear();
+        for (UserHandleCompat user : profiles) {
+            // Query for the set of apps
+            final long qiaTime = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
+            final List<LauncherActivityInfoCompat> apps = mLauncherApps.getActivityList(null, user);
+            if (DEBUG_LOADERS) {
+                Log.d(TAG, "getActivityList took "
+                        + (SystemClock.uptimeMillis()-qiaTime) + "ms for user " + user);
+                Log.d(TAG, "getActivityList got " + apps.size() + " apps for user " + user);
+            }
+            // Fail if we don't have any apps
+            // TODO: Fix this. Only fail for the current user.
+            if (apps == null || apps.isEmpty()) {
+                return;
+            }
+            boolean quietMode = mUserManager.isQuietModeEnabled(user);
+            // Create the ApplicationInfos
+            for (int i = 0; i < apps.size(); i++) {
+                LauncherActivityInfoCompat app = apps.get(i);
+                // This builds the icon bitmaps.
+                mBgAllAppsList.add(new AppInfo(mContext, app, user, mIconCache, quietMode));
+            }
+
+            final ManagedProfileHeuristic heuristic = ManagedProfileHeuristic.get(mContext, user);
+            if (heuristic != null) {
+                final Runnable r = new Runnable() {
+
+                    @Override
+                    public void run() {
+                        heuristic.processUserApps(apps);
+                    }
+                };
+                runOnMainThread(new Runnable() {
+
+                    @Override
+                    public void run() {
+                        // Check isLoadingWorkspace on the UI thread, as it is updated on
+                        // the UI thread.
+                        if (mIsLoadingAndBindingWorkspace) {
+                            synchronized (mBindCompleteRunnables) {
+                                mBindCompleteRunnables.add(r);
+                            }
+                        } else {
+                            runOnWorkerThread(r);
+                        }
+                    }
+                });
+            }
+        }
+        // Huh? Shouldn't this be inside the Runnable below?
+        final ArrayList<AppInfo> added = mBgAllAppsList.added;
+        mBgAllAppsList.added = new ArrayList<AppInfo>();
+
+        // Post callback on main thread
+        mHandler.post(new Runnable() {
+            public void run() {
+
+                final long bindTime = SystemClock.uptimeMillis();
+                final Callbacks callbacks = tryGetCallbacks(oldCallbacks);
+                if (callbacks != null) {
+                    callbacks.bindAllApplications(added);
+                    if (DEBUG_LOADERS) {
+                        Log.d(TAG, "bound " + added.size() + " apps in "
+                                + (SystemClock.uptimeMillis() - bindTime) + "ms");
+                    }
+                } else {
+                    Log.i(TAG, "not binding apps: no Launcher activity");
+                }
+            }
+        });
+        // Cleanup any data stored for a deleted user.
+        ManagedProfileHeuristic.processAllUsers(profiles, mContext);
+        if (DEBUG_LOADERS) {
+            Log.d(TAG, "Icons processed in "
+                    + (SystemClock.uptimeMillis() - loadTime) + "ms");
+        }
+    }
+```
+通过LauncherAppsCompat的对象，拿到所有安装的应用，遍历添加到AllAppsList里。
+```
+	mBgAllAppsList.add(new AppInfo(mContext, app, user, mIconCache, quietMode));
+```
+同绑定workspace数据一样，会调用Launcher里实现的回调方法 bindAllApplications，将数据填充到抽屉View容器里。
+```
+	/**
+     * Add the icons for all apps.
+     * <p>
+     * Implementation of the method from LauncherModel.Callbacks.
+     */
+    public void bindAllApplications(final ArrayList<AppInfo> apps) {
+        if (waitUntilResume(mBindAllApplicationsRunnable, true)) {
+            mTmpAppsList = apps;
+            return;
+        }
+
+        if (mAppsView != null) {
+            mAppsView.setApps(apps);
+        }
+        if (mLauncherCallbacks != null) {
+            mLauncherCallbacks.bindAllApplications(apps);
+        }
+    }
+``` 
+这样加载流程基本就结束了。
+给大家梳理一个大致的流程，很多细节都没有介绍，不懂的地方可以留言，谢谢。

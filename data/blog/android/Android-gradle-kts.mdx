@@ -1,0 +1,94 @@
+---
+title: Android gradle.kts迁移
+date: 2021-12-09 10:20:46
+tags: ['Gradle']
+---
+随着 Gralde 和 kotlin 的迭代，Android Studio 里已经可以使用 kotlin 代替 groovy， 纯 kotlin 开发，dsl 特性在配置工作上更好理解，提示也比较友好。 gradle.kts 目前还有一个明显的缺点，构建效率比 groovy 低，但后续应该会做优化 
+
+## Task 配置
+
+## 依赖插件管理
+### 插件管理
+平时我们 gradle 项目里使用的 application，library插件，在 plugin 代码块直接使用就可以了，gradle.kts里也是一样的方式,
+只不过要使用双引号 "
+
+```
+    plugins {
+        id "com.android.application"
+        id "kotlin-android"
+    }
+```
+
+不同的是在 gradle.kts 中直接使用，会报如下的异常，找不到插件
+
+    * Exception is:
+    org.gradle.api.plugins.UnknownPluginException: Plugin [id: 'com.android.application'] was not found in any of the following sources:
+
+    - Gradle Core Plugins (plugin is not in 'org.gradle' namespace)
+    - Plugin Repositories (plugin dependency must include a version number for this source)
+        at org.gradle.plugin.use.internal.DefaultPluginRequestApplicator.resolveToFoundResult(DefaultPluginRequestApplicator.java:222)
+
+
+plugins 代码块仅解析 Gradle 插件中提供的插件或使用 pluginManagement 代码块指定的自定义存储库中提供的插件。如果插件来自 plugin manager 中不存在的 buildScript 依赖项，那么这些插件在 Kotlin 中就必须使用 apply 才能应用。例如：
+
+    apply(plugin = "kotlin-android")
+
+或在 pluginManagement 里添加你可能使用到的插件，统一管理
+```
+    pluginManagement {
+        plugins {
+            id("com.android.application")
+            id("com.android.library")
+            id("com.android.dynamic-feature")
+
+            val kotlinVersion: String by settings
+            id("org.jetbrains.kotlin.jvm") version kotlinVersion
+            id("org.jetbrains.kotlin.android") version kotlinVersion
+            
+        }
+    }
+```
+### 依赖管理
+gradle.kts 里有一个 versionCatalogs dsl api，可以通过 create dsl api 管理所有的依赖，
+```
+    enableFeaturePreview("VERSION_CATALOGS")
+
+    // 管理所有依赖库
+    versionCatalogs {
+        val versions = mapOf(
+            "kotlin" to "1.5.31",
+            "coroutines" to "1.+",
+            
+        )
+
+        create("libs") {
+            // iterator all versions
+            versions.keys.forEach { name ->
+                versions[name]?.let { v -> version(name, v) }
+            }
+
+            // Required by Android dynamic feature modules and SafeArgs
+            alias("kotlin-reflect").to("org.jetbrains.kotlin", "kotlin-reflect")
+                .versionRef("kotlin")
+            alias("coroutines").to("org.jetbrains.kotlinx", "kotlinx-coroutines-android")
+                .versionRef("coroutines")
+            bundle("kotlin", listOf("kotlin-reflect", "coroutines"))
+            
+        }
+    }
+```
+其中几个API含义如下，
+
++ alias: 对依赖库重新命名，方便引用
++ version: 指定依赖库的版本
++ versionRef: 索引 version 方法定义的依赖库版本
++ bundle: 可将多个依赖库打包，一次 implement/api 就可以引入多个依赖库，更加便利了
+
+在 module gradle 中就可以通过 libs 来访问到
+```
+    dependencies {
+        api(libs.bundles.kotlin)
+        api(libs.bundles.retrofit)
+        api(libs.coil)
+        
+```

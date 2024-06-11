@@ -1,0 +1,316 @@
+---
+title: Handler常见应用场景和常见问题分析
+date: 2019-01-02 19:57:03
+tags: ['Android']
+---
+
+### Handler应用场景
+根据前几篇的分析，根据实际的开发，我们可以总结出以下Handler的使用场景
+
+#### 最简单的消息发送
+
+主线程使用Handler， 主线程里或子线程里发送消息，或延迟发送消息的方式更新UI  
+如，  
+启动应用时Splash页面的延迟2，3秒后，跳转到主页面  
+加载完页面的各个控件后，再加载线程下载图片，最后更新图片等等
+```
+    private static final int WHAT_UPDATE_ICON = 1;
+
+    private Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case WHAT_UPDATE_ICON:
+                    Log.e(Tag, "receive message:" + msg.obj);
+                    break;
+            }
+        }
+    };
+
+    Message msg = handler.obtainMessage(WHAT_UPDATE_ICON);
+    msg.obj = "update the imageview";
+    handler.sendMessage(msg);
+```
+使用消息的时候，尽量使用 obtainMessage 的方式来获取Message，避免多次创建Message对象，消耗内存，效率低下。
+
+#### 结合HandlerThread处理耗时任务
+
+结合HandlerThread，串行的处理单个耗时任务，如单任务下载
+```
+    class DownloadOneByOne extends HandlerThread {
+        public DownloadOneByOne() {
+            super(DownloadOneByOne.class.getSimpleName());
+        }
+
+        @Override
+        protected void onLooperPrepared() {
+            super.onLooperPrepared();
+            // 初始化下载组件
+        }
+    }
+
+    private HandlerThread mHandlerThread;
+
+    private Handler downloadHandler = new Handler(){
+        @Override
+        public void handleMessage(Message msg) {
+            super.handleMessage(msg);
+            String url = (String) msg.obj;
+            // 使用下载组件开始下载
+            
+        }
+    };
+
+    public void initHandler() {
+        // 初始化Handler
+        mHandlerThread = new DownloadOneByOne();
+        mHandlerThread.start();
+        
+        downloadHandler = new Handler(mHandlerThread.getLooper());
+    }
+
+    private void sendDownloadTask(String downloadUrl) {
+        // 发送下载任务
+        Message msg = downloadHandler.obtainMessage(WHAT_DOWNLOAD_TASK);
+        msg.obj = downloadUrl;
+        downloadHandler.sendMessage(msg);
+    }
+```
+#### 倒计时View的简易实现
+
+通过Handler我们还可以快速简易，并且不占用太多性能的实现一个简易的倒计时View。
+```
+    public class CountDownView extends AppCompatTextView {
+        /**
+        * 总时间
+        */
+        private long seconds;
+        /**
+        * 当前分钟
+        */
+        private long minutes;
+        /**
+        * 当前秒数
+        */
+        private int second = 60;
+
+        private static final int SECONDS_PER_MINUTE = 60;
+        private static final int MILLS_PER_SECOND = 1000;
+        private static final int MILLS_PER_MINUTE = SECONDS_PER_MINUTE * 1000;
+
+        private static final int WHAT_DONE = 2;
+        private static final int WHAT_TICK = 1;
+
+        private int marginEnd;
+
+        private StringBuilder content = new StringBuilder();
+
+        public CountDownView(Context context, @Nullable AttributeSet attrs) {
+            super(context, attrs);
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            DeviceProfile deviceProfile = Launcher.getLauncher(getContext()).getDeviceProfile();
+            int size = (int) (MeasureSpec.getSize(widthMeasureSpec) / deviceProfile.inv.numColumns);
+            marginEnd = marginEnd == 0 ? (size - deviceProfile.iconSizePx) / 2 : marginEnd;
+
+            setMarginEnd(marginEnd);
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+
+        private void setMarginEnd(int marginEnd) {
+            LinearLayout.LayoutParams layoutParams = (LinearLayout.LayoutParams) getLayoutParams();
+            layoutParams.setMarginEnd(marginEnd);
+            layoutParams.resolveLayoutDirection(layoutParams.getLayoutDirection());
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            if (handler.hasMessages(WHAT_TICK)) {
+                handler.removeMessages(WHAT_TICK);
+            }
+        }
+
+        private Handler handler = new Handler() {
+            @Override
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                    case WHAT_DONE:
+                        setVisibility(View.GONE);
+                        break;
+                    default:
+                        setText(content.toString());
+                        handler.post(runnable);
+                        break;
+                }
+            }
+        };
+
+        /***
+        * 设置倒计时
+        * @param millis
+        */
+        public void setCountDownMills(long millis) {
+            seconds = (long) Math.floor(millis / MILLS_PER_SECOND);
+            minutes = (long) Math.floor(millis / MILLS_PER_MINUTE) - 1;
+            // start after one second
+            handler.postDelayed(runnable, MILLS_PER_SECOND);
+        }
+
+        private Runnable runnable = new Runnable() {
+            @Override
+            public void run() {
+                if (seconds <= 0) {
+                    handler.sendEmptyMessage(WHAT_DONE);
+                    return;
+                }
+                seconds--;
+                if (second <= 0) {
+                    second = SECONDS_PER_MINUTE;
+                    minutes = (long) Math.floor(seconds / SECONDS_PER_MINUTE);
+                }
+                second--;
+                content.delete(0, content.length());
+
+                appendZeroWhenLower10(minutes);
+                content.append(":");
+                appendZeroWhenLower10(second);
+
+                if (handler.hasMessages(WHAT_TICK)) {
+                    handler.removeMessages(WHAT_TICK);
+                }
+                handler.sendEmptyMessageDelayed(WHAT_TICK, MILLS_PER_SECOND);
+            }
+        };
+
+        private StringBuilder appendZeroWhenLower10(long value) {
+            if (value < 10) {
+                content.append("0").append(value);
+            } else {
+                content.append(value);
+            }
+            return content;
+        }
+    }
+```
+#### 结合IntentService的使用
+使用IntentService处理耗时的任务相对比较简单，我们来一个常用的应用。结合AlarmManager的调度，息屏唤醒 IntentService 定时处理任务的案例来讲。当我们的应用进入后台activity栈的时候，注册并启动AlarmManager任务
+```
+    private static final String ACTION_WAKE_UP = "com.doze.cpu.wakeup";
+
+    public static void registerAlarm(Context context, int wakeType) {
+        type = wakeType;
+        if (alarmManager == null)
+            alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+
+        if (operation != null) alarmManager.cancel(operation);
+
+        schedule(context);
+    }
+    
+    private static void schedule(Context context) {
+        Intent intent = new Intent();
+        intent.setAction(ACTION_WAKE_UP);
+        operation = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        switch (type) {
+            case 0:
+                AlarmUtils.setRTCWakeup(alarmManager, AlarmUtils.DEFAULT_TRIGGER_AT_MILLIS, operation);
+                break;
+            case 1:
+                AlarmUtils.setElapsedWakeup(alarmManager, AlarmUtils.DEFAULT_TRIGGER_AT_MILLIS, operation);
+                break;
+        }
+    }
+```
+定时5分钟发送一个Action为 com.doze.cpu.wakeup 的广播，我们的广播需要继承 WakefulBroadcastReceiver， 在onReceive里，调用 startWakefulService 方法，会创建一个1分钟的 WakeLock，唤醒 cpu 处理我们的任务，我们的任务在 IntentService 处理最好不过了，处理完就销毁，不会有多余的占用
+```
+    public class WakeCPUReceiver extends WakefulBroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+
+            Intent wakefulIntent = new Intent(context, WorkService.class);
+            startWakefulService(context, wakefulIntent);
+            schedule(context);
+        }
+    }
+```
+startWakefulService 的源码
+```
+    public static ComponentName startWakefulService(Context context, Intent intent) {
+        synchronized (mActiveWakeLocks) {
+            int id = mNextId;
+            mNextId++;
+            if (mNextId <= 0) {
+                mNextId = 1;
+            }
+
+            intent.putExtra(EXTRA_WAKE_LOCK_ID, id);
+            ComponentName comp = context.startService(intent);
+            if (comp == null) {
+                return null;
+            }
+
+            PowerManager pm = (PowerManager)context.getSystemService(Context.POWER_SERVICE);
+            PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                    "wake:" + comp.flattenToShortString());
+            wl.setReferenceCounted(false);
+            wl.acquire(60*1000);
+            mActiveWakeLocks.put(id, wl);
+            return comp;
+        }
+    }
+```
+在IntentService里，我们在 onHandleIntent 处理我们的任务后，再调用
+WakefulBroadcastReceiver 的静态方法 completeWakefulIntent，释放 WakeLock，减少电量的消耗
+```
+    public class WorkService extends IntentService {
+        
+        @Override
+        protected void onHandleIntent(Intent intent) {
+            Log.e(WakeCPUReceiver.TAG, "WorkService is working");
+            // TODO 处理我们的任务
+            WakeCPUReceiver.completeWakefulIntent(intent);
+        }
+    }
+```
+completeWakefulIntent 源码
+```
+    public static boolean completeWakefulIntent(Intent intent) {
+        final int id = intent.getIntExtra(EXTRA_WAKE_LOCK_ID, 0);
+        if (id == 0) {
+            return false;
+        }
+        synchronized (mActiveWakeLocks) {
+            PowerManager.WakeLock wl = mActiveWakeLocks.get(id);
+            if (wl != null) {
+                wl.release();
+                mActiveWakeLocks.remove(id);
+                return true;
+            }
+            // We return true whether or not we actually found the wake lock
+            // the return code is defined to indicate whether the Intent contained
+            // an identifier for a wake lock that it was supposed to match.
+            // We just log a warning here if there is no wake lock found, which could
+            // happen for example if this function is called twice on the same
+            // intent or the process is killed and restarted before processing the intent.
+            Log.w("WakefulBroadcastReceiver", "No active wake lock id #" + id);
+            return true;
+        }
+    }
+```
+### Handler的溢出问题
+虽然Handler很好用，但由于它可以延迟发送消息，在我们延迟启动其他组件，或者使用Activity的引用调用一些方法时，如果在延迟的过程中，Activity finish掉了，这时候就会抛出溢出的异常了。  
+所以，我们在onDestroy的时候，记得 调用removeCallbacks，removeMessages等移除消息的方法来解决这个问题。  
+
+Handler 机制如何保证消息不错乱？  
+handler 机制中多个 handler 共有一个 looper 不会错乱是因为在 handler 发送消息的时候，会将当前的 handler 对象绑定到message 的 target 属性上，然后在 Looper 取到消息后通过 msg.target 拿到之前的 handler 对象，然后调用handler的handleMessage 方法。  
+
+消息延迟的原理？  
+handler发送延迟消息，会将当前的延迟时间绑定到msg的when属性上，然后在循环MessageQueue获取msg时判断如果当前有延迟就进行阻塞，通过计时器计算时间，时间通过系统启动计算时间，然后等待阻塞时间结束之后将其唤醒，在阻塞过程中会将之后的消息放在消息队列的头部去处理。
+
+同一个线程中可以有多个Handler，只有一个Looper，而MessageQueue在looper中初始化的，所以也只有一个MessageQueue。因此对应关系是：Handler：Looper = 多对一，Looper：MeesageQueue = 一对一，Handler：MessageQueue = 多对一。
+
+Looper中的死循环为什么不会引器主线程ANR？  
+可以说整个应用的生命周期都是在looper.loop()控制之下的（在应用启动的入口main函数中初始化ActivityThread，Handler，Looper，然后通过handler和looper去控制初始化应用）。而looper.loop采用的是Linux的管道机制，在没有消息的时候会进入阻塞状态，释放CPU执行权，等待被唤醒。真正会卡死主线程的操作是在回调方法onCreate/onStart/onResume等操作时间过长，会导致掉帧，甚至发生ANR，looper.loop本身不会导致应用卡死。

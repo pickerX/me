@@ -1,0 +1,29 @@
+---
+title: 'String,StringBuilder,StringBuffer区别'
+date: 2019-09-02 16:34:09
+tags: ['Java']
+---
+### String
+我们都知道 String 是 final 修饰的类，因此它的值是不可变的，这就导致每次对String的操作都会生成新的 String 对象。
+很明显，频繁对 String 做操作时，不仅效率低下，而且大量浪费有限的内存空间。  
+简单的例子如
+
+    String str = "hello";
+    str += "world!";
+
+普通的 String + 操作, 由于 String 不可修改值， 因此会在内存中占用三个位置，分别为， "hello", "world!", "hello world!"
+
+### StringBuilder & StringBuffer
+
+当我们需要对字符串进行修改的时候，Java提供了 StringBuffer 和 StringBuilder 类。  
+和 String 类不同的是，StringBuffer 和 StringBuilder 类的对象能够被多次的修改，并且不产生新的未使用对象。二者的区别是 
+
+1. StringBuilder 的方法不是线程安全的
+2. StringBuilder 速度会比 StringBuffer 快
+
+因此，在实际开发过程中，
+
+1. 如果要操作少量的数据用 String；
+2. 多线程操作字符串缓冲区下操作大量数据 StringBuffer；
+3. 单线程操作字符串缓冲区下操作大量数据 StringBuilder。
+

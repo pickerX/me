@@ -1,0 +1,87 @@
+---
+title: ffmpeg-结构体 AVPacket
+date: 2020-01-08 12:33:06
+tags: ['ffmpeg']
+---
+该系列文章主要介绍 ffmpeg 工作流程里一些重要的结构体。
+前面的文章，我们知道在 ffmpeg 里，转码的工作流程可以描述为如下的图表:
+```
+     _______              ______________
+    |       |            |              |
+    | input |  demuxer   | encoded data |   decoder
+    | file  | ---------> | packets      | -----+
+    |_______|            |______________|      |
+                                               v
+                                         _________
+                                        |         |
+                                        | decoded |
+                                        | frames  |
+                                        |_________|
+     ________             ______________       |
+    |        |           |              |      |
+    | output | <-------- | encoded data | <----+
+    | file   |   muxer   | packets      |   encoder
+    |________|           |______________|
+```
+从封装格式，编解码，网络协议，数据存放等几个方面入手，文章如下:
+
+[ffmpeg-结构体 AVPacket]()  
+[ffmpeg-结构体 AVFrame]()  
+[ffmpeg-结构体 AVStream]()  
+[ffmpeg-结构体 AVPacket]()  
+[ffmpeg-结构体 AVPacket]()  
+
+本文要介绍的结构体是  AVPacket。
+
+AVPacket 是用来存储编码的音视频数据，通常用在以下两个地方
+
+1. 由 demuxer 分解导出的数据，作为输入传递给 decoder，做解码操作
+2. 由 encoders 编码后输出，传递给 muxers 做复用，封装操作
+
+简单的说就是，存放编码后、解码前的压缩数据，即ES数据
+
+对于视频来说，AVPacket 包含一个编码的帧数据，而对于音频，则可能包含多个压缩的帧数据。Encoders 允许输出空的packets数据，即没有压缩的帧数据，只包含了 side data(如在编码的末尾更新流的一些参数)
+
+AVPacket的源代码位于 libavcodec/avcodec.h 文件里，
+```
+    typedef struct AVPacket {
+        /** AVPacket数据的引用计数缓冲区引用 */
+        AVBufferRef *buf;
+        /** 显示时间戳 */
+        int64_t pts;
+        /** 解码时间戳 */
+        int64_t dts;
+        /* 压缩编码的数据 */
+        uint8_t *data;
+        /* data的大小 */
+        int   size;
+        /* 标识该AVPacket所属的视频/音频流 */
+        int   stream_index;
+        int   flags;
+        /**
+        * 额外的 packet data, 由容器提供.
+        * 用来存储多种类型的 side 信息
+        */
+        AVPacketSideData *side_data;
+        int side_data_elems;
+
+        /**
+        * 该 AVPacket 的时长
+        * duration = next_pts - this_pts.
+        */
+        int64_t duration;
+        // byte position in stream, -1 if unknown
+        int64_t pos;
+
+    #if FF_API_CONVERGENCE_DURATION
+        /**
+        * @deprecated Same as the duration field, but as int64_t. This was required
+        * for Matroska subtitles, whose duration values could overflow when the
+        * duration field was still an int.
+        */
+        attribute_deprecated
+        int64_t convergence_duration;
+    #endif
+    } AVPacket;
+```
+这个结构体比较简单，但在编解码过程中非常有用

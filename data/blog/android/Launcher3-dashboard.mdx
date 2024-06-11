@@ -1,0 +1,89 @@
+---
+title: Launcher3负一屏的定制开发
+date: 2019-01-02 19:59:52
+tags: ['Android', 'Launcher',]
+---
+
+### 左一屏 
+可能有的小伙伴不清楚什么是左一屏，或者是负一屏。以我的了解，在智能手机还没有普及的时候，最早的左一屏的概念是来自Apple 苹果电脑的dashboard操作面板,如下图
+
+![dashboard](http://upload-images.jianshu.io/upload_images/2621624-76e486193011177e.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+后来iphone, Android也都使用了这个概念，相对PC而言，手机上的dashboard相对的精简了许多。如图
+![iphone dashboard](http://upload-images.jianshu.io/upload_images/2621624-98eedeba52a96b23.jpg?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+以上图片来源于Apple官网
+
+用过Google亲儿子手机的小伙伴都会发现，原生的Launcher并没有左一屏的功能，而像最近新出的手机都带了这个功能。
+但其实dashboard的功能Google已经提供给我们了.
+
+我们找到WorkSpace里的 createCustomContentContainer ，这个方法就是创建dashboard的功能。
+```
+    WorkSpace.java
+
+    public void createCustomContentContainer() {
+        CellLayout customScreen = (CellLayout)
+                mLauncher.getLayoutInflater().inflate(R.layout.workspace_screen, this, false);
+        customScreen.disableDragTarget();
+        customScreen.disableJailContent();
+
+        mWorkspaceScreens.put(CUSTOM_CONTENT_SCREEN_ID, customScreen);
+        mScreenOrder.add(0, CUSTOM_CONTENT_SCREEN_ID);
+
+        // We want no padding on the custom content
+        customScreen.setPadding(0, 0, 0, 0);
+
+        addFullScreenPage(customScreen);
+
+        // Ensure that the current page and default page are maintained.
+        mDefaultPage = mOriginalDefaultPage + 1;
+
+        // Update the custom content hint
+        if (mRestorePage != INVALID_RESTORE_PAGE) {
+            mRestorePage = mRestorePage + 1;
+        } else {
+            setCurrentPage(getCurrentPage() + 1);
+        }
+        updateCustomContentMarker();
+    }
+```
+我们都知道Launcher的工作台是WorkSpace，而Workspace里的每一屏就是CellLayout啦。可以发现，从布局 R.layout.workspace_screen inflate出CellLayout，然后以全屏的方式添加到WorkSpace中，指定dashboard的特定screenId CUSTOM_CONTENT_SCREEN_ID -301，同时更新我们的默认主页 mDefaultPage。
+
+知道创建的方法，那怎么把它启用呢？
+找到它的调用方法，在Launcher的bindScreens方法里。创建dashboard的条件是 hasCustomContentToLeft()
+```
+    @Override
+    public void bindScreens(ArrayList<Long> orderedScreenIds) {
+        bindAddScreens(orderedScreenIds);
+        // If there are no screens, we need to have an empty screen
+        if (orderedScreenIds.size() == 0) {
+            mWorkspace.addExtraEmptyScreen();
+        }
+
+        // Create the custom content page (this call updates mDefaultScreen which calls
+        // setCurrentPage() so ensure that all pages are added before calling this).
+        if (hasCustomContentToLeft()) {
+            mWorkspace.createCustomContentContainer();
+            populateCustomContentContainer();
+        }
+    }
+```
+hasCustomContentToLeft方法，有一个LauncherCallbacks的回调，这样我们就有思路了
+```
+     /**
+     * To be overridden by subclasses to hint to Launcher that we have custom content
+     */
+    protected boolean hasCustomContentToLeft() {
+        if (mLauncherCallbacks != null) {
+            return mLauncherCallbacks.hasCustomContentToLeft();
+        }
+        return false;
+    }
+```
+1. 可以在继承Launcher的子类里设置一个LauncherCallbacks， 并让hasCustomContentToLeft() 方法返回true即可  
+2. 或者直接修改这个方法，直接返回true也可以
+
+但其实上面的方法都不太好，因为在众多的体验中，有人喜欢这个功能，也有人不喜欢这个功能。故我们比较好的做法是设计一个开关的功能，
+让用户自行选择即可。
+
+至于dashboard放什么内容就很值得考究了，设计得好的话就会让用户爱不释手，这个就交给产品经理吧。

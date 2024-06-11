@@ -1,0 +1,159 @@
+---
+title: ffmpeg-API划分
+date: 2020-01-19 13:44:33
+tags: ['ffmpeg']
+---
+本系列根据ffmpeg api文档进行介绍，
+ffmpeg 文档描述大概可以分为以下几个不同的库:
+
+| 库 | 描述 |
+| --- | --- |
+| libavcodec | 音视频各种格式的编解码。各种格式的编解码代码(如aacenc.c、aacdec.c等)|
+| libavformat | 用于各种音视频封装格式的生成和解析，包括获取解码所需信息、读取音视频数据等功能。各种流媒体协议代码(如rtmpproto.c等)以及音视频格式的(解)复用代码(如flvdec.c、flvenc.c等)|
+| libavutil | 包含一些公共的工具函数的使用库，包括算数运算，字符操作等 |
+| libavfilter | 各种音视频过滤器 |
+| libavdevice | 用于硬件的音视频采集、加速和显示 |
+| libswresample | 提供音频重采样，采样格式转换和混合等功能 |
+| libswscale | 提供原始视频的比例缩放、色彩映射转换、图像颜色空间或格式转换的功能 |
+
+## 模块划分
+按官方的文档，ffmpeg 库按模块划分为，
+
++ ASS styles	
++ ASS functions	
++ end of Dialogue Event	
++ libpostproc	Video 后处理库
++ libswresample	Audio 重采样, 采样格式转换以及混合库
++ libswscale	颜色转换和缩放库
++ VDPAU_Decoding	
+
+其他比较大的模块主要在，libavcodec, libavformat, libavutil
+
+### libavcodec 模块
++ libavcodec: 编码解码库
+    + Decoding	
+        + Frame 解析	
+    + Encoding	
+    + Codecs	
+        + Native Codecs
+        + External library wrappers	
+        + Hardware Accelerators bridge	
+            + oDirect3D11
+            + oDXVA2	
+            + oVA API Decoding	
+            + oVDPAU Decoder and Renderer: VDPAU硬件加速有两个模块
+            + XvMC	
+    + Internal	
+    + send/receive encoding and decoding API overview:  avcodec_send_packet()/avcodec_receive_frame()/avcodec_send_frame()/ avcodec_receive_packet() 函数提供一个 编解码 API, 将输入和输出分离开
+
+    + Core functions/structures:基本定义、查询 libavcodec 功能、关键结构体内崔分配，等等
+        + AVPacket: 编码的数据单元
+        + AVHWAccel:	
+        + AVPicture: Picture 数据结构体
+    + Utility functions:与编码和解码（或两者都不是）相关的其他实用函数
+        + Pixel formats: Pixel 格式相关的函数
+        + FFT functions	
+### libavdevice
++ libavdevice: 指定设备的 muxing/demuxing 库
+
+### libavfilter
+
++ libavfilter: Graph-based 帧编辑库
+    + Buffer sink API
+        + Buffer sink accessors: 获取 stream 的属性
+    + Buffer source API	
+
+### libavformat
+
++ libavformat: I/O 和 分解/复用库
+    + Demuxing:	Demuxers 读取一个媒体文件，分离到 packets
+    + Muxing: muxer 以 AVPackets 的形式获取编码数据，并将其写入文件或指定容器格式的其他 bytestreams 输出流.
+    + I/O Read/Write	
+    + Demuxers	
+        + Native Demuxers
+        + External library wrappers
+    + I/O Protocols	
+    + Internal	
+    + Public Metadata API: 分解时，该 API 允许 libavformat 导出 metadata tags 给 application客户端 
+    + Core functions: 查询 libavformat capabilities 函数, 核心结构体内存分配
+    + Utility functions: 与复用和解复用相关的杂项效用函数（或两者都不）
+        + RIFF FourCCs: 获取将 RIFF FourCCs 映射到 libavcodec AVCodecIDs 的表
+
+### libavresample
+
++ libavresample	Libavresample (lavr) is a library that handles audio resampling, sample format conversion and mixing
+
+### libavutil
+
++ libavutil	Common code shared across all FFmpeg libraries
+    + Crypto and Hashing	
+        + AES	
+        + Base64	
+        + Blowfish	
+        + CAMELLIA	
+        + CAST5	
+        + DES	
+        + Hash Functions: Hash functions useful in multimedia
+            + Adler-32：Adler-32 hash function implementation
+            + CRC：CRC (Cyclic Redundancy Check) hash function implementation
+            + Generic Hashing API：An abstraction layer for all hash functions supported by libavutil
+            + MD5：MD5 hash function implementation
+            + Murmur3：MurmurHash3 hash function implementation
+            + RIPEMD：RIPEMD hash function implementation
+            + SHA：SHA-1 and SHA-256 (Secure Hash Algorithm) hash function implementations
+            + SHA-512：SHA-512 (Secure Hash Algorithm) hash function implementations
+        + HMAC	
+        + LZO	
+        + RC4	
+        + TEA	
+        + TWOFISH	
+        + XTEA	
+    + Mathematics：时间和时间戳的数据工具集
+        + AVRational：Rational number calculation
+    + String Manipulation：字符操作
+    + Memory Management：操作内存的工具集
+        + Alignment Macros：宏指令工具函数
+        + Function Attributes：	Function attributes applicable to memory handling functions
+        + Heap Management	Functions responsible for allocating, freeing, and copying memory
+        + Dynamic Array	Utilities to make an array grow when needed
+        + Miscellaneous Functions	Other functions related to memory allocation
+    + Data Structures	
+        + AVBuffer	AVBuffer is an API for reference-counted data buffers
+        + AVBufferPool	AVBufferPool is an API for a lock-free thread-safe pool of AVBuffers
+        + AVFrame	AVFrame is an abstraction for reference-counted raw multimedia data
+            + AV_FRAME_FLAGS	Flags describing additional frame properties
+        + AVOptions	AVOptions provide a generic system to declare options on arbitrary structs ("objects")
+            + Evaluating option strings	This group of functions can be used to evaluate option strings and get numbers out of them
+            + Option setting functions	Those functions set the field of obj with the given name to value
+            + Option getting functions	Those functions get a value of the option with the given name from an object
+        + AVDictionary	Simple key:value store
+        + AVTree	Low-complexity tree container
+    + Video related	
+        + Display transformation matrix functions	The display transformation matrix specifies an affine transformation that should be applied to video frames for correct presentation
+        + Spherical video mapping	A spherical video file contains surfaces that need to be mapped onto a sphere
+        + Stereo3D types and functions	A stereoscopic video file consists in multiple views embedded in a single frame, usually describing two views of a scene
+    + Audio related	
+        + Audio FIFO Buffer	
+        + Audio channel masks	A channel layout is a 64-bits integer with a bit set for every channel
+        + Audio channel layouts	
+        + Audio downmix metadata	
+        + Audio sample formats	Audio sample format enumeration and related convenience functions
+        + Samples manipulation	Functions that manipulate audio samples
+    + Error Codes	
+    + Logging Facility	
+        + Logging Constants	
+    + Other	
+        + Preprocessor String Macros	String manipulation macros
+        + Library Version Macros	Useful to check and match library version in order to maintain backward compatibility
+        + Constants	
+            + Encoding specific	
+            + Timestamp specific	FFmpeg internal timebase and timestamp definitions
+        + Image related	AVPicture types, pixel formats and basic image planes manipulation
+        + Version and Build diagnostics	Macros and function useful to check at compiletime and at runtime which version of libavutil is in use
+            + Deprecation Guards	FF_API_* defines may be placed below to indicate public API that will be dropped at a future version bump
+        + Media Type	Media Type
+
+
+
+参考:  
+[http://ffmpeg.org/doxygen/4.1/modules.html](http://ffmpeg.org/doxygen/4.1/modules.html)

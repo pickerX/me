@@ -1,0 +1,348 @@
+---
+title: Launcher3桌面加载流程分析-1
+date: 2018-10-02 19:59:46
+tags: ['Android', 'Launcher',]
+---
+
+省略一万字前奏
+如果大家没有源码，
+不介意的话，可以参考[Launcher3-N-Folder](https://github.com/Tic-pf/Launcher3-N-Folder) 开发中
+### 主入口Launcher
+#### LauncherAppState
+
+Launcher的onCreate里比较长，我们依次取代码片段来分析，看oncrate方法的这一段,初始化LauncherAppState
+```
+    public void onCreate() {
+        
+        LauncherAppState app = LauncherAppState.getInstance();
+        
+    }
+```
+
+LauncherAppState是保存一些全局的，核心的对象。主要有整个Launcher的工作台workspace，Launcher的控制器LauncherModel，应用图标的缓存机制IconCache，设备的配置信息InvariantDeviceProfile等。  
+
+构造方法，首先初始化内存的追踪器TestingUtils，记录我们app的内存信息，这个工具在我们开发其他app分析内存信息时也是很有用的。
+```
+
+    private LauncherAppState() {
+        
+
+        if (TestingUtils.MEMORY_DUMP_ENABLED) {
+            TestingUtils.startTrackingMemory(sContext);
+        }
+
+        mInvariantDeviceProfile = new InvariantDeviceProfile(sContext);
+        mIconCache = new IconCache(sContext, mInvariantDeviceProfile);
+        mWidgetCache = new WidgetPreviewLoader(sContext, mIconCache);
+
+        mAppFilter = AppFilter.loadByName(sContext.getString(R.string.app_filter_class));
+        mModel = new LauncherModel(this, mIconCache, mAppFilter);
+
+        LauncherAppsCompat.getInstance(sContext).addOnAppsChangedCallback(mModel);
+
+        // Register intent receivers
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_LOCALE_CHANGED);
+        filter.addAction(SearchManager.INTENT_GLOBAL_SEARCH_ACTIVITY_CHANGED);
+        // For handling managed profiles
+        filter.addAction(LauncherAppsCompat.ACTION_MANAGED_PROFILE_ADDED);
+        filter.addAction(LauncherAppsCompat.ACTION_MANAGED_PROFILE_REMOVED);
+        filter.addAction(LauncherAppsCompat.ACTION_MANAGED_PROFILE_AVAILABLE);
+        filter.addAction(LauncherAppsCompat.ACTION_MANAGED_PROFILE_UNAVAILABLE);
+
+        sContext.registerReceiver(mModel, filter);
+        
+    }         
+```
+LauncherAppsCompat里添加了一个应用变化的回调，由LauncherModel实现接口，及时的响应数据变化。LauncherAppsCompat是获取所有应用，监听应用变化的一个抽象，Android 5.0前后的版本获取方式不一样了，这就是Launcher良好适配性的体现了。
+```
+
+    LauncherAppsCompat.getInstance(sContext).addOnAppsChangedCallback(mModel);
+```
+Android 5.0以前的监听
+```
+    private void registerForPackageIntents() {
+        IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        filter.addDataScheme("package");
+        mContext.registerReceiver(mPackageMonitor, filter);
+        filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_EXTERNAL_APPLICATIONS_AVAILABLE);
+        filter.addAction(Intent.ACTION_EXTERNAL_APPLICATIONS_UNAVAILABLE);
+        mContext.registerReceiver(mPackageMonitor, filter);
+    }
+```
+
+Android5.0后的监听
+```
+    import android.content.pm.LauncherApps;
+
+    protected LauncherApps mLauncherApps;
+
+    public void addOnAppsChangedCallback(LauncherAppsCompat.OnAppsChangedCallbackCompat callback) {
+        WrappedCallback wrappedCallback = new WrappedCallback(callback);
+        synchronized (mCallbacks) {
+            mCallbacks.put(callback, wrappedCallback);
+        }
+        mLauncherApps.registerCallback(wrappedCallback);
+    }
+```
+
+除了TestingUtils，应用变化监听外，初始化两个核心对象IconCache，LauncherModel。LauncherModel添加了设备变更，用户信息变更的广播，这是因为当用户修改设备信息如语言，区域，用户信息等，LauncherModel会刷新数据，改变图标，标题等信息。  
+LauncherAppState的初始化到这里基本上就完成了。
+
+#### DeviceProfile，InvariantDeviceProfile，Launcher的配置
+
+我们继续看，下一步
+```
+    LauncherAppState app = LauncherAppState.getInstance();
+
+    // Load configuration-specific DeviceProfile
+    mDeviceProfile = getResources().getConfiguration().orientation
+            == Configuration.ORIENTATION_LANDSCAPE ?
+            app.getInvariantDeviceProfile().landscapeProfile
+            : app.getInvariantDeviceProfile().portraitProfile;
+
+```
+通过Configuration获取横屏配置landscapeProfile 或者portraitProfile竖屏配置
+
+##### DeviceProfile
+DeviceProfile的数据都是来自InvariantDeviceProfile，封装一些工具方法，我们直接看重点InvariantDeviceProfile
+
+##### InvariantDeviceProfile
+InvariantDeviceProfile的初始化是在LauncherAppState构造里new出来的，调用的是
+
+```
+    InvariantDeviceProfile(Context context) {
+        
+        numRows = closestProfile.numRows;
+        numColumns = closestProfile.numColumns;
+        numHotseatIcons = closestProfile.numHotseatIcons;
+        hotseatAllAppsRank = (int) (numHotseatIcons / 2);
+        defaultLayoutId = closestProfile.defaultLayoutId;
+        numFolderRows = closestProfile.numFolderRows;
+        numFolderColumns = closestProfile.numFolderColumns;
+        minAllAppsPredictionColumns = closestProfile.minAllAppsPredictionColumns;
+
+        iconSize = interpolatedDeviceProfileOut.iconSize;
+        iconBitmapSize = Utilities.pxFromDp(iconSize, dm);
+        iconTextSize = interpolatedDeviceProfileOut.iconTextSize;
+        hotseatIconSize = interpolatedDeviceProfileOut.hotseatIconSize;
+        fillResIconDpi = getLauncherIconDensity(iconBitmapSize);
+
+        // If the partner customization apk contains any grid overrides, apply them
+        // Supported overrides: numRows, numColumns, iconSize
+        applyPartnerDeviceProfileOverrides(context, dm);
+
+        Point realSize = new Point();
+        display.getRealSize(realSize);
+        // The real size never changes. smallSide and largeSide will remain the
+        // same in any orientation.
+        int smallSide = Math.min(realSize.x, realSize.y);
+        int largeSide = Math.max(realSize.x, realSize.y);
+
+        landscapeProfile = new DeviceProfile(context, this, smallestSize, largestSize,
+                largeSide, smallSide, true /* isLandscape */);
+        portraitProfile = new DeviceProfile(context, this, smallestSize, largestSize,
+                smallSide, largeSide, false /* isLandscape */);
+    }
+```
+
+可以看到，通过closestProfile和interpolatedDeviceProfileOut拿到了一系列配置项，如桌面的行，列，Hotseat(桌面底部固定的应用栏)的个数，Hotseat所有应用的位置，布局id，文件夹的行列，图标的大小等等。之后再将这些信息new出我们的DeviceProfile对象。  
+那问题来了，closestProfile和interpolatedDeviceProfileOut是什么？？怎么计算出来的？
+
+
+```
+    WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+    Display display = wm.getDefaultDisplay();
+    DisplayMetrics dm = new DisplayMetrics();
+    display.getMetrics(dm);
+
+    Point smallestSize = new Point();
+    Point largestSize = new Point();
+    display.getCurrentSizeRange(smallestSize, largestSize);
+
+    // This guarantees that width < height
+    minWidthDps = Utilities.dpiFromPx(Math.min(smallestSize.x, smallestSize.y), dm);
+    minHeightDps = Utilities.dpiFromPx(Math.min(largestSize.x, largestSize.y), dm);
+
+    ArrayList<InvariantDeviceProfile> closestProfiles =
+            findClosestDeviceProfiles(minWidthDps, minHeightDps, getPredefinedDeviceProfiles());
+    InvariantDeviceProfile interpolatedDeviceProfileOut =
+            invDistWeightedInterpolate(minWidthDps,  minHeightDps, closestProfiles);
+ ```   
+
+可以发现，通过设备的宽高等信息，从各种分辨率的DeviceProfiles列表中找到最合适的配置信息，查找的方法如下，根据设备的宽高跟列表里的的最小宽高差值的平方根从小到大排序，第一个就是我们期望的配置
+```
+    /**
+    * Returns the closest device profiles ordered by closeness to the specified width and height
+    */
+    // Package private visibility for testing.
+    ArrayList<InvariantDeviceProfile> findClosestDeviceProfiles(
+            final float width, final float height, ArrayList<InvariantDeviceProfile> points) {
+
+        // Sort the profiles by their closeness to the dimensions
+        ArrayList<InvariantDeviceProfile> pointsByNearness = points;
+        Collections.sort(pointsByNearness, new Comparator<InvariantDeviceProfile>() {
+            public int compare(InvariantDeviceProfile a, InvariantDeviceProfile b) {
+                return Float.compare(dist(width, height, a.minWidthDps, a.minHeightDps),
+                        dist(width, height, b.minWidthDps, b.minHeightDps));
+            }
+        });
+
+        return pointsByNearness;
+    }
+
+    @Thunk float dist(float x0, float y0, float x1, float y1) {
+        return (float) Math.hypot(x1 - x0, y1 - y0);
+    }
+```
+
+配置好的InvariantDeviceProfile列表信息如下，构造参数依次是，  
+配置名称，宽高，行数，列数，文件夹行数列数，图标大小，图标文本大小
+hotseat配置资源文件，hotseat图标大小，默认页的资源文件  
+故，当我们有新机型没有适配，就可以在这里修改或新增配置
+```
+
+    ArrayList<InvariantDeviceProfile> getPredefinedDeviceProfiles() {
+        ArrayList<InvariantDeviceProfile> predefinedDeviceProfiles = new ArrayList<>();
+        // width, height, #rows, #columns, #folder rows, #folder columns,
+        // iconSize, iconTextSize, #hotseat, #hotseatIconSize, defaultLayoutId.
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Super Short Stubby",
+                255, 300,     2, 3, 2, 3, 3, 48, 13, 3, 48, R.xml.default_workspace_3x3));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Shorter Stubby",
+                255, 400,     3, 3, 3, 3, 3, 48, 13, 3, 48, R.xml.default_workspace_3x3));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Short Stubby",
+                275, 420,     3, 4, 3, 4, 4, 48, 13, 5, 48, R.xml.default_workspace_4x4));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Stubby",
+                255, 450,     3, 4, 3, 4, 4, 48, 13, 5, 48, R.xml.default_workspace_4x4));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Nexus S",
+                296, 491.33f, 4, 4, 4, 4, 4, 48, 13, 5, 48, R.xml.default_workspace_4x4));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Nexus 4",
+                359, 567,     4, 4, 4, 4, 4, DEFAULT_ICON_SIZE_DP, 13, 5, 56, R.xml.default_workspace_4x4));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Nexus 5",
+                335, 567,     5, 4, 5, 4, 4, DEFAULT_ICON_SIZE_DP, 13, 5, 56, R.xml.default_workspace_5x4_no_all_apps));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Large Phone",
+                406, 694,     5, 5, 4, 4, 4, 64, 14.4f,  5, 56, R.xml.default_workspace_5x5));
+        // The tablet profile is odd in that the landscape orientation
+        // also includes the nav bar on the side
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Nexus 7",
+                575, 904,     5, 6, 4, 5, 4, 72, 14.4f,  7, 60, R.xml.default_workspace_5x6));
+        // Larger tablet profiles always have system bars on the top & bottom
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("Nexus 10",
+                727, 1207,    5, 6, 4, 5, 4, 76, 14.4f,  7, 76, R.xml.default_workspace_5x6));
+        predefinedDeviceProfiles.add(new InvariantDeviceProfile("20-inch Tablet",
+                1527, 2527,   7, 7, 6, 6, 4, 100, 20,  7, 72, R.xml.default_workspace_5x6));
+        return predefinedDeviceProfiles;
+    }
+```
+Launcher的配置初始化到这里基本上就完成了。
+
+还有一些其他的对象的初始化，包括workspace状态变化的动画加载控制LauncherStateTransitionAnimation, 应用组件的管理器AppWidgetManagerCompat, 处理组件长按事件的ViewLauncherAppWidgetHost，因为在Launcher的初始化流程里不是特别需要，故后文有机会再做介绍。
+
+#### LauncherModel加载应用信息
+整个流程里比较复杂的就是LauncherModel加载应用了, 在onCreate里
+```
+    mModel = app.setLauncher(this);
+	
+```
+LauncherAppState里调用了LauncherModel的初始化方法 initialize,参数是Launcher
+```
+    LauncherModel setLauncher(Launcher launcher) {
+        getLauncherProvider().setLauncherProviderChangeListener(launcher);
+        mModel.initialize(launcher);
+        mAccessibilityDelegate = ((launcher != null) && Utilities.ATLEAST_LOLLIPOP) ?
+            new LauncherAccessibilityDelegate(launcher) : null;
+        return mModel;
+    }
+
+```
+
+LauncherModel的initialize参数是LauncherModel.Callbacks，Launcher里实现了LauncherModel.Callbacks的一系列接口用于绑定获取到的应用信息，文件夹信息，屏幕信息等等
+```
+    public void initialize(Callbacks callbacks) {
+        synchronized (mLock) {
+            // Disconnect any of the callbacks and drawables associated with ItemInfos on the
+            // workspace to prevent leaking Launcher activities on orientation change.
+            unbindItemInfosAndClearQueuedBindRunnables();
+            mCallbacks = new WeakReference<Callbacks>(callbacks);
+        }
+    }
+```
+在加载数据之前先清除正在运行的线程DeferredBindRunnables，清除DeferredHandler里等待执行的任务，并且将所有ItemInfo unbind
+
+```
+    /** Unbinds all the sBgWorkspaceItems and sBgAppWidgets on the main thread */
+    void unbindWorkspaceItemsOnMainThread() {
+        // Ensure that we don't use the same workspace items data structure on the main thread
+        // by making a copy of workspace items first.
+        final ArrayList<ItemInfo> tmpItems = new ArrayList<ItemInfo>();
+        synchronized (sBgLock) {
+            tmpItems.addAll(sBgWorkspaceItems);
+            tmpItems.addAll(sBgAppWidgets);
+        }
+        Runnable r = new Runnable() {
+                @Override
+                public void run() {
+                    for (ItemInfo item : tmpItems) {
+                        item.unbind();
+                    }
+                }
+            };
+        runOnMainThread(r);
+    }
+```
+
+接着我们才看到真正开始加载数据了，onCreate里的LauncherModel调用startLoader，创建线程加载数据
+
+
+```          
+    if (!mRestoring) {
+        if (DISABLE_SYNCHRONOUS_BINDING_CURRENT_PAGE) {
+            // If the user leaves launcher, then we should just load items asynchronously when
+            // they return.
+            mModel.startLoader(PagedView.INVALID_RESTORE_PAGE);
+        } else {
+            // We only load the page synchronously if the user rotates (or triggers a
+            // configuration change) while launcher is in the foreground
+            mModel.startLoader(mWorkspace.getRestorePage());
+        }
+    }
+    
+```
+
+当第一次打开时，会调用mModel.startLoader(PagedView.INVALID_RESTORE_PAGE)，停止旧的Loader任务，stopLoaderLocked，然后new出一个LoaderTask(mApp.getContext(), loadFlags) Runnable，通过Handler sworker post出去，开始加载任务
+
+```
+    public void startLoader(int synchronousBindPage) {
+        startLoader(synchronousBindPage, LOADER_FLAG_NONE);
+    }
+
+    public void startLoader(int synchronousBindPage, int loadFlags) {
+            // Enable queue before starting loader. It will get disabled in Launcher#finishBindingItems
+            InstallShortcutReceiver.enableInstallQueue();
+            synchronized (mLock) {
+                // Clear any deferred bind-runnables from the synchronized load process
+                // We must do this before any loading/binding is scheduled below.
+                synchronized (mDeferredBindRunnables) {
+                    mDeferredBindRunnables.clear();
+                }
+
+                // Don't bother to start the thread if we know it's not going to do anything
+                if (mCallbacks != null && mCallbacks.get() != null) {
+                    // If there is already one running, tell it to stop.
+                    stopLoaderLocked();
+                    mLoaderTask = new LoaderTask(mApp.getContext(), loadFlags);
+                    if (synchronousBindPage != PagedView.INVALID_RESTORE_PAGE
+                            && mAllAppsLoaded && mWorkspaceLoaded && !mIsLoaderTaskRunning) {
+                        mLoaderTask.runBindSynchronousPage(synchronousBindPage);
+                    } else {
+                        sWorkerThread.setPriority(Thread.NORM_PRIORITY);
+                        sWorker.post(mLoaderTask);
+                    }
+                }
+            }
+        }
+```
+开始加载应用信息的任务后，由于后续的篇幅比较长，请看下一篇文章的详细介绍。

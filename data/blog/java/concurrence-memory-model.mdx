@@ -1,0 +1,160 @@
+---
+title: Java内存模型深度解析
+date: 2018-2-15 09:17:08
+tags: ['Java']
+---
+## 内存模型
+内存模型的系列文章，请参考，有一种恍然大悟的感觉
+
++ [Java内存模型深度解析：基础部分](http://www.codeceo.com/article/java-memory-1.html#comments)
++ [Java内存模型深度解析：重排序](http://www.codeceo.com/article/java-memeory-2.html)
++ [Java内存模型深度解析：顺序一致性](http://www.codeceo.com/article/java-memory-3.html)
++ [Java内存模型深度解析：volatile](http://www.codeceo.com/article/java-memory-4.html) 
++ [Java内存模型深度解析：锁](http://www.codeceo.com/article/java-memory-5.html)
++ [Java内存模型深度解析：final](http://www.codeceo.com/article/java-memory-6.html)
++ [Java内存模型深度解析：总结](http://www.codeceo.com/article/java-memory-7.html)
+
+其中, 对volatile的补充 ==> [volatile和lock原理分析](https://liuzhengyang.github.io/2017/03/28/volatileandlock/)  
+对多线程的补充 ==> [java线程安全总结](https://www.iteye.com/topic/806990)
+
+## 总结
+现如今，处理器使用写缓冲区来临时保存向内存写入的数据。 但每个处理器上的写缓冲区，仅仅对它所在的处理器可见。这个特性会以及处理器重排序对内存操作的执行顺序产生重要的影响：处理器对内存的读/写操作的执行顺序，__不一定与内存实际发生的读/写操作顺序一致。__  
+除了顺序一致性外(有序性)，并发编程我们还会遇到一个可见性的问题：多个线程之间是不能互相传递数据通信的，它们之间的沟通只能通过共享变量来进行，如果一个线程修改了共享变量，其他线程并不能马上看到这个被修改后的数值。  
+为了保证顺序一致性和可见性，我们会有几种方式来处理，
++ 线程通信
+  + 共享内存
+  + 消息传递
++ 线程同步
+
+### 线程同步的几种方式
+#### synchronized 关键字
+修饰方法
+```
+    public synchronized void method() {
+        
+    }
+```
+修饰代码块
+```
+    synchronized(object){ 
+        
+    }
+```
+同步是一种高开销的操作，因此应该尽量减少同步的内容。 
+通常没有必要同步整个方法，使用synchronized代码块同步关键代码即可
+
+#### 特殊域变量 volatile
+多线程中的非同步问题主要出现在对域的读写上，如果让域自身避免这个问题，则就不需要修改操作该域的方法。 
+用final域，有锁保护的域和volatile域可以避免非同步的问题。 
+```
+    class Bank {
+        //需要同步的变量加上volatile
+        private volatile int account = 100;
+
+        public int getAccount() {
+            return account;
+        }
+        //这里不再需要synchronized 
+        public void save(int money) {
+            account += money;
+        }
+    ｝
+```
+1. 可见性是指当多个线程访问同一个变量时，一个线程修改了这个变量的值，其他线程能够立即看得到修改的值。
+2. volatile 可以禁止指令重排，这就保证了代码的程序会严格按照代码的先后顺序执行
+3. volatile 是不能保证原子性的
+4. volatile 没有涉及到锁操作，比使用同步的开销更低
+
+volatile 是适合读多写少的场景。当只有一个线程可以修改字段的值，其它线程可以随时读取，那么把字段声明为volatile是合理的
+
+#### 阻塞队列实现线程同步
+并发编程-Queues 一篇里已经介绍过，java.util.concurrent 里为我们提供了很多便利的阻塞队列类，主要实现 BlockingQueue 接口。 通常会使用 LinkedBlockingQueue 等来实现同步，常用于生产者-消费者模式下的场景
+
+#### 原子变量 atomic
+需要使用线程同步的根本原因在于对普通变量的操作不是原子的。  
+那么什么是原子操作呢？  
+原子操作就是指将读取变量值、修改变量值、保存变量值看成一个整体来操作，即这几种行为要么同时完成，要么都不完成。  
+
+在Java的 util.concurrent.atomic 包中提供了创建了原子类型变量的工具类，简化线程的同步。其中 AtomicInteger类可以用原子方式更新int的值，可用在应用程序中(如以原子方式增加的计数器)，但不能用于替换Integer；可扩展 Number，允许那些处理机遇数字类的工具和实用工具进行统一访问。
+
+AtomicInteger类常用方法：  
++ AtomicInteger(int initialValue) : 创建具有给定初始值的新的  AtomicInteger  
++ addAddGet(int dalta) : 以原子方式将给定值与当前值相加  
++ get() : 获取当前值  
+
+原子操作主要有：  
++ 引用变量和大多数原始变量(long和double除外)的读写操作；  
++ 所有使用 volatile 修饰的变量(包括long和double)的读写操作。  
+
+__Simple Usage__
+```
+    class Bank {
+        private AtomicInteger account = new AtomicInteger(100);
+
+        public AtomicInteger getAccount() {
+            return account;
+        }
+
+        public void save(int money) {
+            account.addAndGet(money);
+        }
+    }
+```
+#### 局部变量 ThreadLocal 
+如果使用ThreadLocal管理变量，则每一个使用该变量的线程都获得该变量的副本， 
+副本之间相互独立，这样每一个线程都可以随意修改自己的变量副本，而不会对其他线程产生影响。  
+```
+    ThreadLocal 类的常用方法  
+    ThreadLocal() : 创建一个线程本地变量   
+    get() : 返回此线程局部变量的当前线程副本中的值   
+    initialValue() : 返回此线程局部变量的当前线程的"初始值"   
+    set(T value) : 将此线程局部变量的当前线程副本中的值设置为value  
+```
+__Simple Usage__  
+```
+    public class Bank {
+        //使用ThreadLocal类管理共享变量account
+        private static ThreadLocal<Integer> account = new ThreadLocal<Integer>() {
+            @Override
+            protected Integer initialValue() {
+                return 100;
+            }
+        };
+
+        public void save(int money) {
+            account.set(account.get() + money);
+        }
+
+        public int getAccount() {
+            return account.get();
+        }
+    }
+```
+注：ThreadLocal 与同步机制   
++ ThreadLocal 与同步机制都是为了解决多线程中相同变量的访问冲突问题。  
++ 前者采用以"空间换时间"的方法，后者采用以"时间换空间"的方式  
+
+#### 重入锁 Lock
+在JavaSE5.0中新增了一个java.util.concurrent包来支持同步。ReentrantLock类是可重入、互斥、实现了Lock接口的锁， 它与使用 synchronized 方法和代码块具有相同的基本行为和语义，并且扩展了其能力，更灵活，二者性能上差不多
+```
+    class Bank { 
+        private int account = 100;
+        //需要声明这个锁
+        private Lock lock = new ReentrantLock();
+        
+        public int getAccount() {
+            return account;
+        }
+
+        //这里不再需要synchronized 
+        public void save(int money) {
+            lock.lock();
+            try {
+                account += money;
+            } finally {
+                lock.unlock();
+            }
+            
+        }
+    ｝
+```

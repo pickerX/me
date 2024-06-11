@@ -1,0 +1,163 @@
+---
+title: 内存管理-优化篇
+date: 2019-09-08 15:40:38
+tags: ['Android']
+---
+首先认识关于内存的两个重要知识
++ 内存溢出（Out of Memory）：系统会给每个APP分配内存也就是Heap Size值。当APP占用的内存加上我们申请的内存资源超过了Dalvik虚拟机的最大内存时就会抛出的Out Of Memory异常。
++ 内存泄漏（Memory Leak）：当一个对象不在使用了，本应该被垃圾回收器（JVM）回收。但是这个对象由于被其他正在使用的对象所持有，造成无法被回收的结果。内存泄漏最终会导致内存溢出。
+
+区别：内存泄露是由于 GC 无法及时或者无法识别可以回收的数据进行及时的回收，导致内存的浪费；内存溢出是由于数据所需要的内存无法得到满足，导致数据无法正常存储到内存中。内存泄露的多次表现就是会导致内存溢出。
+
+## 内存优化
+### Handler，Thread等内部类造成的内存泄漏
+在Activity中创建非静态内部类，非静态内部类会持有Activity的隐式引用，若内部类生命周期长于Activity，会导致Activity实例无法被回收。（屏幕旋转后会重新创建Activity实例，如果内部类持有引用，将会导致旋转前的实例无法被回收）。  
+
+解决办法： 
++ 如果一定要使用内部类，就改用static内部类(静态的内部类不会持有外部类的一个隐式引用)，在内部类中通过 WeakReference 的方式引用外界资源。对Handler、Thread、Runnable等使用弱引用，并且调用removeCallbacksAndMessages 等移除。
+
++ 在关闭Activity的时候停掉你的后台线程。线程停掉了，就相当于切断了Handler和外部连接的线，Activity自然会在合适的时候被回收。
+
+### 资源未及时关闭造成内存泄漏
+对于使用了 BraodcastReceiver，ContentObserver，Cursor，File，Stream，ContentProvider，Bitmap，动画，I/O，数据库，网络的连接等资源的使用，应该在Activity 销毁时及时关闭或者注销，否则这些资源将不会被回收，造成内存泄漏。
+
++ 广播 BroadcastReceiver：记得注销注册unregisterReceiver();
++ IO 流：记得关闭流 InputStream / OutputStream.close();
++ 数据库游标 Cursor：使用后关闭游标cursor.close()
++ 对于图片资源Bitmap：当它不再被使用时，应调用recycle() 回收此对象的像素所占用的内存，再赋为 null
++ 动画：属性动画或循环动画，在 Activity 退出时需要停止动画。在属性动画中有一类无限循环动画，如果在Activity中播放这类动画并且在 onDestroy 中没有去停止动画，那么这个动画将会一直播放下去，这时候 Activity 会被 View 所持有，从而导致 Activity 无法被释放。在 Activity 中onDestroy 去调用 objectAnimator.cancel() 来停止动画。
+
+### static 关键字修饰的变量由于生命周期过长，容易造成内存泄漏
+static 对象的生命周期过长，应该谨慎使用。一定要使用要及时进行 null 处理。
+
+静态变量 Activity 和 View 会导致内存泄漏。例如：context，textView 实例的生命周期与应用的生命周期一样，而他们都持有当前 Activity ，当 Activity 销毁，而它们的引用一直被持有，就不会被回收。因此就产生内存泄漏了。
+
+### 不合理使用Context造成内存泄漏
+单例模式造成的内存泄漏，如 Context 的使用，单例中传入的是 Activity，在关闭 Activity时，因单例持有Activity 的引用, 导致Activity 无法被回收。
+
+建议使用 application 替代 Activity， 或者 activity.getApplicationContext() 获取 context
+
+### WebView造成内存泄露
+关于 WebView 的内存泄露，因为 WebView 在加载网页后会长期占用内存而不能被释放，因此我们在 Activity 销毁后把 webview 从父控件内 remove ，同时调用它的 destory() 方法来销毁它以释放内存。
+
+### String 频繁的字符串拼接
+严格的讲，String拼接只能归结到内存抖动中，因为产生的String副本能够被GC，不会造成内存泄露。
+使用 StringBuffer 或者 StringBuilder 代替 String，可以在一定程度上避免OOM和内存抖动。
+
+### MVP架构不合理应用
+在 MVP 的架构中，通常 Presenter 要同时持有 View 和 Model 的引用，如果在 Activity 退出的时候，Presenter 正在进行一个耗时操作，那么 Presenter 的生命周期会比 Activity 长，导致 Activity 无法回收，造成内存泄漏
+
+解决方法：在 onDestory 方法中把 presenter 中的 相关资源销毁，如停止线程等等
+
+### 其他方式调整
+gradle 配置，heapsize会增大2-3倍，缓解OOM的发生
+
+    android:largeHeap="true"
+
+修改 JVM 配置 -XXM等等
+
+## 性能优化
+app 性能方面的问题分类
+1. 渲染问题：过度绘制、布局冗杂
+2. 内存问题：内存浪费（内存管理）、内存泄漏
+3. 功耗问题：耗电
+
+### 渲染优化
+常见的渲染问题有，
+
+1. 人为在UI线程中做轻微耗时操作，导致UI线程卡顿；
+2. 布局Layout过于复杂，无法在16ms内完成渲染；
+3. 同一时间动画执行的次数过多，导致CPU或GPU负载过重；
+4. View 过度绘制，导致某些像素在同一帧时间内被绘制多次，从而使CPU或GPU负载过重；
+5. View 频繁的触发 measure, layout，导致measure, layout累计耗时过多及整个View频繁的重新渲染；
+6. 内存频繁触发GC过多(内存抖动), 导致暂时阻塞渲染操作；
+7. 冗余资源及逻辑等导致加载和执行缓慢；
+8. 臭名昭著的ANR；
+
+常用解决办法：
++ 优化布局，ConstraintLayout 减少布局嵌套等等
++ 移除多余的背景
++ GPU检测工具，优化布局
++ 自定义view时，clipRect 和 clipPath 只在限定范围内绘制
++ 启用严格模式，异步处理耗时，删除冗余资源，操作，
+
+  
+### 集合优化
+不必要的内存浪费也是我们开发中着重要优化的地方
+针对 Java 原生集合 Map 的优化，在数据量1000以内时，使用 Google Android 推荐的集合
+```
+
+    android.util.SparseArray<E>
+    android.util.SparseBooleanArray
+    android.util.SparseIntArray
+    android.util.SparseLongArray
+
+    android.support.v4.util.ArrayMap<K, V>
+    android.support.v4.util.ArraySet<E>
+    android.support.v4.util.LongSparseArray<E>
+    android.support.v4.util.SparseArrayCompat<E>
+    android.support.v4.util.CircularArray<E>
+```
+
+简单介绍下ArrayMap原理：
+
+    内部存储是使用两个数组，一个存储 key 的 hash 值，一个存储 value 值
+
+    当你想获取某个value的时候，ArrayMap 会计算输入key转换过后的hash值，然后对hash数组使用二分查找法寻找到对应的index
+
+    然后我们可以通过这个index在另外一个数组中直接访问到需要的键值对。
+
+这些集合都比Java原生的集合更适合在移动设备上使用，在内存和效率上都做了很多优化。跟 Java集合相比有以下不同：
+
+数据结构不同  
+* ArrayMap 和 SparseArray 采用的都是两个数组，Android专门针对内存优化而设计的  
+* HashMap 采用的是数据 + 链表 或 红黑树  
+
+内存优化  
+* ArrayMap 比 HashMap 更节省内存，综合性能方面在数据量不大的情况下，推荐使用ArrayMap；
+* Hash需要创建一个额外对象来保存每一个放入map的entry，且容量的利用率比ArrayMap低，整体更消耗内存
+* SparseArray比ArrayMap节省1/3的内存，但SparseArray只能用于key为int类型的Map，所以int类型的Map数据推荐使用SparseArray；
+
+性能方面： 
+* ArrayMap查找时间复杂度O(logN)；ArrayMap增加、删除操作需要移动成员，速度相比较慢，对于个数小于1000的情况下，性能基本没有明显差异
+* HashMap查找、修改的时间复杂度为O(1)；
+* SparseArray 少了拆箱的操作，适合频繁删除和插入来回执行的场景，性能比较好
+
+缓存机制
+
+* ArrayMap 针对容量为4和8的对象进行缓存，可避免频繁创建对象而分配内存与GC操作，这两个缓存池大小的上限为10个，防止缓存池无限增大；
+* HashMap 没有缓存机制
+* SparseArray 有延迟回收机制，提供删除效率，同时减少数组成员来回拷贝的次数
+
+扩容机制
+
+* ArrayMap 是在容量满的时机触发容量扩大至原来的1.5倍，在容量不足 1/3 时触发内存收缩至原来的0.5倍，更节省的内存扩容机制
+* HashMap是在容量的 0.75 倍时触发容量扩大至原来的2倍，且没有内存收缩机制。HashMap扩容过程有hash重建，相对耗时。所以能大致知道数据量，可指定创建指定容量的对象，能减少性能浪费。
+
+并发问题
+
+* ArrayMap 是非线程安全的类，大量方法中通过对mSize判断是否发生并发，来决定抛出异常。但没有覆盖到所有并发场景，比如大小没有改变而成员内容改变的情况就没有覆盖
+* HashMap 是在每次增加、删除、清空操作的过程将modCount加1，在关键方法内进入时记录当前mCount，执行完核心逻辑后，再检测mCount是否被其他线程修改，来决定抛出异常。这一点的处理比ArrayMap更有全面。
+
+如果在知道集合使用大小的情况下，在初始化的时候可以直接指明，避免不必要的浪费
+
+### 避免使用 enum 枚举
+普通的 int 型常量，enum 增长量是使用static int的13倍！！！不仅仅如此，使用enum，运行时还会产生额外的内存占用，
++ 每个enum值会增加 20+ byte
++ 会额外增加 12~16 bytes 给数组
+
+## 线程优化
+线程的创建和销毁会带来比较大的性能开销。因此在频繁使用线程的场景下，优化也很有必要。  
+查看项目中是否存在随意 new Thread() ，线程缺乏管理的情况。使用 AsyncTask 或者线程池对线程进行管理，可以提升 APP的 性能。另外，推荐使用 Rxjava 来实现异步操作，既方便又优雅。
+
+在项目中异常： 
+旧版本 RxJava 毫秒级定期执行线程任务时，内存直接暴走， 线程数暴增，最终采用线程池定期执行任务，或者 interval 操作符
+
+## 电量优化
+[电量监测-BatteryHistorian](https://ticooops.github.io/2018/10/14/android/Battery-historian%E7%94%B5%E9%87%8F%E4%BC%98%E5%8C%96/)
+项目优化点：
+手机待机后需要时时同步各种数据，使用WakeLock操作，导致耗电增加。采用 JobScheduler 方案来优化，在手机待机的时候不主动做任何同步，交由 JobScheduler 在条件允许下只做数次同步即可，在唤醒手机时做必要的同步即可，大大节省了 CPU 的使用，节省流量，网络的使用，耗电量显著下降
+
+## 网络优化
+
+[浅谈移动端网络优](https://mp.weixin.qq.com/s/CBLp6iEUbSBZ2cSAT6trWw)

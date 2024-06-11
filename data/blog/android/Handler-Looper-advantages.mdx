@@ -1,0 +1,62 @@
+---
+title: Handler Looper为什么不会造成卡顿
+date: 2021-01-16 16:23:56
+tags: ['Android',]
+---
+
+我们在点击Launch桌面的图标第一次启动Activity时，会最终走到ActivityThread的main方法，在main方法里面创建Looper和MessageQueue 处理主线程的消息，然后 Looper.loop() 方法进入死循环，我们的 Activity 的生命周期都是通过 Handler 机制处理的，包括 onCreate、onResume等方法
+```
+    public static void main(String[] args) {
+        Looper.prepareMainLooper();// 创建Looper和MessageQueue对象，用于处理主线程的消息
+
+        ActivityThread thread = new ActivityThread();
+        thread.attach(false);// 建立Binder通道 (创建新线程)
+
+        if (sMainThreadHandler == null) {
+            sMainThreadHandler = thread.getHandler();
+        }
+
+        Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+        Looper.loop();
+
+        // 如果能执行下面方法，说明应用崩溃或者是退出了
+        throw new RuntimeException("Main thread loop unexpectedly exited");
+    }
+```
+下面是 loop 方法循环
+```
+    public static void loop() {
+        final Looper me = myLooper();
+        if (me == null) {
+            throw new RuntimeException("No Looper; Looper.prepare() wasn't called on this thread.");
+        }
+        final MessageQueue queue = me.mQueue;
+        // Make sure the identity of this thread is that of the local process,
+        // and keep track of what that identity token actually is.
+        Binder.clearCallingIdentity();
+        final long ident = Binder.clearCallingIdentity();
+        for (;;) {
+            Message msg = queue.next(); // might block
+            if (msg == null) {
+                // No message indicates that the message queue is quitting.
+                return;
+            }
+            // This must be in a local variable, in case a UI event sets the logger
+            Printer logging = me.mLogging;
+            if (logging != null) {
+                logging.println(">>>>> Dispatching to " + msg.target + " " +
+                        msg.callback + ": " + msg.what);
+            }
+
+            msg.target.dispatchMessage(msg);
+ 
+            msg.recycleUnchecked();
+    
+```
+通过创建一个for死循环来处理消息 ```msg.target.dispatchMessage(msg);```
+
+### 那为什么不会造成应用卡死？
+对于线程即是一段可执行的代码，当可执行代码执行完成后，线程生命周期便该终止了，线程退出。而对于主线程肯定不能运行一段时间后就自动结束了，那么如何保证一直存活呢？？简单的做法就是可执行代码能一直执行下去，死循环便能保证不会被退出，例如：binder线程也是采用死循环方法，通过循环方式不同与Binder驱动进行读写操作，当然并非简单的死循环，无消息时会休眠，但是死循环又如何处理其他事物呢？？通过创建新的线程。真正卡死主线程操作的是在回调方法 onCreate、onStart、onResume 等操作时间过长，会导致掉帧甚至ANR，Looper.loop()本身不会导致应用卡死。
+
+### 主线程的死循环一直运行会不会特别消耗CPU资源呢？
+其实不然这里就涉及到Linux pipe/epoll机制，简单说就是在主线程的MessageQueue没有消息时，便阻塞在loop的queue.next()中的nativePollOnce()方法里，此时主线程会释放CPU资源进入休眠状态，直到下个消息到达或者有事务发生，通过往pipe管道写端写入数据来唤醒主线程工作。这里采用的epoll机制，是一种IO多路复用机制，可以同时监控多个描述符，当某个描述符就绪(读或写就绪)，则立刻通知相应程序进行读或写操作，本质同步I/O，即读写是阻塞的。 所以说，主线程大多数时候都是处于休眠状态，并不会消耗大量CPU资源。    

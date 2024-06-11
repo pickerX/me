@@ -1,0 +1,324 @@
+---
+title: ffmpeg-AVFrame
+date: 2020-01-13 12:30:00
+tags: ['ffmpeg']
+---
+
+本文要介绍的结构体是 AVFrame.
+AVFrame 是原始多媒体数据的抽象，用来描述解码后的原始音频数据(PCM)或者原始视频数据(YUV420, RGB等等).  
+即 存放编码前、解码后的原始数。
+
+__注意: AVFrame是表示解码后的原始数据，而AVPackets是表示编码后的数据__
+
+av_frame_alloc: 分配 AVFrame 内存
+av_frame_free: 释放 AVFrame 内存
+
+AVFrame 分配过一次内存后，就可以多次复用，来保存不同的数据(如一个 AVFrame 持有多个来自 decoder 的 frames). 在这种场景里，调用av_frame_unref() 来释放所有引用，同时会重置为初始状态，这样就能够继续复用了
+
+通过 AVFrame 表示的数据，通常用 AVBuffer API 进行引用计数。底层缓冲区引用存储在 AVFrame.buf/AVFrame.extended_buf 中。
+
+当 AVFrame 里有至少包含有一个数据时，我们就要考虑进行引用计数了。每一个 data plane 必须包含在 AVFrame.buf 或者 AVFrame.extended_buf 中的一个。对于所有数据，可能只有一个缓冲区，对于每个 plane ，可能有一个单独的缓冲区，或者介于两者之间的任何东西  
+
+通过 AVOptions 可以访问 Fields
+
+AVFrame 里的 AVClass 可通过调用 avcodec_get_frame_class() 获得
+源码在 libavutil/frame.h 文件中
+```
+    typedef struct AVFrame {
+    #define AV_NUM_DATA_POINTERS 8
+        /**
+        * 图像数据(picture/channel), 通过第一个字节的分配来区分
+        一些解码器访问0，0-宽度，高度以外的区域，请参见avcodec_align_dimensions2()。
+        一些过滤器和swscale 最多可以读取超出 plane 16个字节，如果要使用这些过滤器，必须分配16个额外字节。
+        注意：除了hwaccel格式外，当封装格式不需要该指针对象时必须设置为空
+        */
+        uint8_t *data[AV_NUM_DATA_POINTERS];
+
+        /**
+        * 对于视频，每行 picture 的大小以字节为单位。
+        * 对于音频，每个 plane 的大小以字节为单位。
+        *
+        * 对于音频，只有 linesize[0] 可以被设置. 对于 planar audio, 每个 channel plane 必须设置一样的大小.
+        *
+        * For video the linesizes should be multiples of the CPUs alignment
+        * preference, this is 16 or 32 for modern desktop CPUs.
+        * Some code requires such alignment other code can be slower without
+        * correct alignment, for yet other it makes no difference.
+        data中“一行”数据的大小。注意：未必等于图像的宽，一般大于图像的宽。
+        */
+        int linesize[AV_NUM_DATA_POINTERS];
+
+        /**
+        * pointers to the data planes/channels.
+        *
+        * For video, this should simply point to data[].
+        *
+        * For planar audio, each channel has a separate data pointer, and
+        * linesize[0] contains the size of each channel buffer.
+        * For packed audio, there is just one data pointer, and linesize[0]
+        * contains the total size of the buffer for all channels.
+        *
+        * Note: Both data and extended_data should always be set in a valid frame,
+        * but for planar audio with more channels that can fit in data,
+        * extended_data must be used in order to access all channels.
+        */
+        uint8_t **extended_data;
+
+        /* 分辨率 */
+        int width, height;
+        /* 音频的一个AVFrame中可能包含多个音频帧，在此标记包含了几个 */
+        int nb_samples;
+
+        /**
+        * 帧格式， -1 为未知格式
+        * 数据为视频帧时，值为 enum AVPixelFormat 里的枚举值,
+        * 为音频时，值为 enum AVSampleFormat 里的枚举值
+        */
+        int format;
+
+        /**
+        * 1 -> 关键帧, 0-> 非关键帧
+        */
+        int key_frame;
+
+        /* 帧的类型（I,B,P）*/
+        enum AVPictureType pict_type;
+
+        /**
+        * 视频帧的宽高比, 0/1 未知/未指定, 16:9，4:3
+        */
+        AVRational sample_aspect_ratio;
+
+        /* 显示时间戳 */
+        int64_t pts;
+        
+        /**
+        * DTS copied from the AVPacket that triggered returning this frame. (if frame threading isn't used)
+        * This is also the Presentation time of this AVFrame calculated from
+        * only AVPacket.dts values without pts values.
+        */
+        int64_t pkt_dts;
+
+        /** 编码帧序号 */
+        int coded_picture_number;
+        /* 显示帧序号 */
+        int display_picture_number;
+
+        /** 质量 (1 (good) ~ FF_LAMBDA_MAX (bad))*/
+        int quality;
+
+        /** 用户的私有数据 */
+        void *opaque;
+        
+        /**
+        * 解码时，repeat_pict 表示 picture 延迟的时长.
+        * extra_delay = repeat_pict / (2*fps)
+        */
+        int repeat_pict;
+
+        /** 是否是隔行扫描 */
+        int interlaced_frame;
+
+        /**
+        * If the content is interlaced, is top field displayed first.
+        */
+        int top_field_first;
+
+        /**
+        * Tell user application that palette has changed from previous frame.
+        */
+        int palette_has_changed;
+
+        /**
+        * reordered opaque 64 bits (generally an integer or a double precision float
+        * PTS but can be anything).
+        * The user sets AVCodecContext.reordered_opaque to represent the input at
+        * that time,
+        * the decoder reorders values as needed and sets AVFrame.reordered_opaque
+        * to exactly one of the values provided by the user through AVCodecContext.reordered_opaque
+        */
+        int64_t reordered_opaque;
+
+        /**
+        * 音频数据的采样率
+        */
+        int sample_rate;
+
+        /**
+        * 音频数据的 Channel layout 参数
+        */
+        uint64_t channel_layout;
+
+        /**
+        * AVBuffer引用备份此帧的数据。如果此数组的所有元素都为空，则此帧
+        * 不计算引用。这个数组必须连续填充，每个 data plane 最多可以有
+        * 一个AVBuffer，因此对于视频，这个数组始终包含所有引用。对于带有* 超过 AV_NUM_DATA_POINTERS channels 数量的 planar 
+        * audio，需要更多的缓冲区来存储。 因此，额外的 AVBufferRef 指针* 存储在extended_buf 中
+        */
+        AVBufferRef *buf[AV_NUM_DATA_POINTERS];
+
+        /**
+        *存储无法放入 AVFrame.buf 的数据
+        * 注意：不同于始终包含所有指针的 AVFrame.extended_data, extended_buf 只包含了 无法存放在 AVFrame.buf 里，多出来的指针
+        * 分配空间 av_malloc() 
+        * 释放空间 av_frame_unref()
+        */
+        AVBufferRef **extended_buf;
+        /**
+        * extended_buf 里元素的数量.
+        */
+        int        nb_extended_buf;
+
+        AVFrameSideData **side_data;
+        int            nb_side_data;
+        
+        /**
+        * Frame flags, a combination of @ref lavu_frame_flags
+        */
+        int flags;
+
+        /**
+        * MPEG vs JPEG YUV range.
+        * - encoding: Set by user
+        * - decoding: Set by libavcodec
+        */
+        enum AVColorRange color_range;
+
+        enum AVColorPrimaries color_primaries;
+
+        enum AVColorTransferCharacteristic color_trc;
+
+        /**
+        * YUV colorspace type.
+        * - encoding: Set by user
+        * - decoding: Set by libavcodec
+        */
+        enum AVColorSpace colorspace;
+
+        enum AVChromaLocation chroma_location;
+
+        /**
+        * frame 最优时间戳
+        * - encoding: unused
+        * - decoding: set by libavcodec, read by user.
+        */
+        int64_t best_effort_timestamp;
+
+        /**
+        * 最后一个 AVPacket 位置
+        * - encoding: unused
+        * - decoding: Read by user.
+        */
+        int64_t pkt_pos;
+
+        /**
+        * packet 数据对应的时长
+        * - encoding: unused
+        * - decoding: Read by user.
+        */
+        int64_t pkt_duration;
+
+        /**
+        * metadata.
+        * - encoding: Set by user.
+        * - decoding: Set by libavcodec.
+        */
+        AVDictionary *metadata;
+
+        /**
+        * decode error flags of the frame, set to a combination of
+        * FF_DECODE_ERROR_xxx flags if the decoder produced a frame, but there
+        * were errors during the decoding.
+        * - encoding: unused
+        * - decoding: set by libavcodec, read by user.
+        */
+        int decode_error_flags;
+    #define FF_DECODE_ERROR_INVALID_BITSTREAM   1
+    #define FF_DECODE_ERROR_MISSING_REFERENCE   2
+    #define FF_DECODE_ERROR_CONCEALMENT_ACTIVE  4
+    #define FF_DECODE_ERROR_DECODE_SLICES       8
+
+        /**
+        * number of audio channels, only used for audio.
+        * - encoding: unused
+        * - decoding: Read by user.
+        */
+        int channels;
+
+        /**
+        * size of the corresponding packet containing the compressed
+        * frame.
+        * It is set to a negative value if unknown.
+        * - encoding: unused
+        * - decoding: set by libavcodec, read by user.
+        */
+        int pkt_size;
+
+    // QP 功能已弃用
+    #if FF_API_FRAME_QP
+        /**
+        * QP table
+        */
+        attribute_deprecated
+        int8_t *qscale_table;
+        /**
+        * QP store stride
+        */
+        attribute_deprecated
+        int qstride;
+
+        attribute_deprecated
+        int qscale_type;
+
+        attribute_deprecated
+        AVBufferRef *qp_table_buf;
+    #endif
+        /**
+        * 对于 hwaccel-format 帧, hw_frames_ctx 指向 AVHWFramesContext 描述该 frame.
+        */
+        AVBufferRef *hw_frames_ctx;
+
+        AVBufferRef *opaque_ref;
+
+        /**
+        * @anchor cropping
+        * @name Cropping
+        * Video frames only. The number of pixels to discard from the the
+        * top/bottom/left/right border of the frame to obtain the sub-rectangle of
+        * the frame intended for presentation.
+        * @{
+        */
+        size_t crop_top;
+        size_t crop_bottom;
+        size_t crop_left;
+        size_t crop_right;
+        /**
+        * @}
+        */
+
+        /**
+        * AVBufferRef for internal use by a single libav* library.
+        * Must not be used to transfer data between libraries.
+        * Has to be NULL when ownership of the frame leaves the respective library.
+        *
+        * Code outside the FFmpeg libs should never check or change the contents of the buffer ref.
+        *
+        * FFmpeg calls av_buffer_unref() on it when the frame is unreferenced.
+        * av_frame_copy_props() calls create a new reference with av_buffer_ref()
+        * for the target frame's private_ref field.
+        */
+        AVBufferRef *private_ref;
+    } AVFrame;
+```
+其中 enum AVPictureType 枚举类型如下，
+
+| Enumerator |  |
+| --- | --- |
+| AV_PICTURE_TYPE_NONE  |  Undefined            |
+| AV_PICTURE_TYPE_I     |  Intra                |
+| AV_PICTURE_TYPE_P     |  Predicted            |
+| AV_PICTURE_TYPE_B     |  Bi-dir predicted     |
+| AV_PICTURE_TYPE_S     |  S(GMC)-VOP MPEG-4    |
+| AV_PICTURE_TYPE_SI    |  Switching Intra      |
+| AV_PICTURE_TYPE_SP    |  Switching Predicted  |
+| AV_PICTURE_TYPE_BI    |  BI type              |

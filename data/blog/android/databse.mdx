@@ -1,0 +1,66 @@
+---
+title: 数据库多线程研究
+date: 2019-09-10 12:13:18
+tags: ['Android']
+---
+Android sqlite 并不是线程安全的，因此我们通常会使用，单例 SqliteOpenHelper，锁，或者事务来保证线程的安全。
+
+## Dbflow
+Dbflow 是开源的一个关系型数据库，设计方式对程序员非常友好，如简单的查询：
+```
+
+    select(name, screenSize)  
+        .from(Android.class)  
+        .where(name.is(“Nexus 5x”))  
+        .and(version.is(6.0))  
+        .querySingle()
+```
+
+与 sql 语句非常相似，对于中小型应用的快速开发，是非常适合的。 根据官网介绍， Dbflow 支持 Trigger,ModelView, Index, Migration, __所有的数据库操作都在同一个线程（线程安全）__
+
+在性能方面，DBFlow 基于 AnnotationProcessing (注解处理器），通过编译期代码生成，运行时对性能是零损耗的。通过模板来为你维护生成的代码。通过缓存和尽可能地重用对象，我们得到了比原生SQLite更快的速度。同时我们还支持懒加载（lazy-loading），比如对于@ForeignKey和@OneToMany，这使得我们有着更高效得查询效率。
+
+## Realm
+首先 Realm 最大的特点就是速度快，然后是线程安全的，关于多线程有以下特点
+
+1. RealmObject 自带线程保护功能，只能在创建它的线程中访问，在子线程中不能访问。
+2. 如果 Realm 关闭，所有查询得到的 RealmObject 都不能使用了。
+3. 尽管 Realm 文件支持多线程访问，但还不支持多进程访问。不同进程请使用不同的 Realm 文件拷贝
+
+其次，Realm 是自己研发出来的一个关系型数据库，上手容易，性能会比 Android 自带的sqlite 等其他数据库，如Dbflow，greenDao等等快上不少，以空间换时间的方式，在不合理管理 Realm 生命周期的情况下，很可能会使应用的存储大小暴增，如暴增到 2G,4G 的大小。对性能要求敏感的，不妨试试 Realm。 
+
+__性能对比参考[Android中Sqlite、Realm与GreenDao性能比较](https://www.jianshu.com/p/f001acf3d733)__   
+
+此外，Realm 还有如下一些坑，
+
++ 如果想在 Realm.close() 之后继续操作查询得到的对象，只能复制一份数据传出来。
++ 如果直接修改或删除 query 得到的数据，必须在transaction中完成
+
+但是这些都可以通过代码来解决， Realm 适合有界面的应用，方便跟 Activity 绑定生命周期。常驻后台多线程应用的场景可能就比较麻烦。
+
+那么要跨线程的时候怎么办呢？
+
+### 跨线程使用 Realm
+请谨记：Realm、RealmObject 和RealmResults 实例都不可以跨线程使用。但是你可以使用异步查询和异步事务来将部分操作放入后台线程进行，待完成时调用线程被通知以获取结果。
+
+当你需要跨线程访问同一部分数据时，只需简单地在该线程重新获取一个 Realm 实例（例如：Realm.getInstance(RealmConfiguration config) 或是其他类似方法），然后通过这个 Realm 实例来查询获得你需要的数据。查询获得的对象会映射到 Realm 中的相同数据，由此方法获得对象在其线程中任何地方都可读写！
+
+更详细的可以参考 [Realm 文档](https://realm.io/cn/docs/java/latest/#%E5%BF%AB%E9%80%9F%E5%85%A5%E9%97%A8)
+
+
+## greenDAO
+greenDAO 是Android上，一个轻量，快速的，对象关系映射(ORM)数据库解决方案，本质上使用的还是 SQLite
+greenDAO 有以下几个特点，
+
++ 稳定性好，于2011创建，应用于众多大型应用场景中
++ 简单易用，简单明了的API，v3版本注释丰富
++ 轻量，greenDAO 小于 150K，只有Java的jar，没有native相关的依赖
++ 快速，可能是 Android 上速度最快的 ORM(其他数据库大家都这么介绍自己)
++ 加密: 支持 SQLCipher 加密数据库
+
+详细API，请移步 [greenDAO官网](http://greenrobot.org/greendao/)
+
+[其他数据库的性能对比](https://github.com/AlexeyZatsepin/Android-ORM-benchmark)  
+
+总而言之，最“快”的ORM是Realm，GreenDAO，ORMLite和Room，但如果性能对项目至关重要，那么带有自定义缓存的“干净”SQLite仍然是最佳选择。在其他参数上，最好的是Realm，DBFlow和GreenDAO。因此，对于中等复杂度的小项目和项目，我建议使用DBFlow或GreenDAO，如果apk的大小不重要 -  Realm。 Realm和Room适合大型项目。并且只有当他们的功能由于某种原因不够，或者ORM方法不适合你时，才能返回使用内置的SQLite API。
+

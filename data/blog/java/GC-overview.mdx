@@ -1,0 +1,106 @@
+---
+title: GC回收机制
+date: 2018-2-25 19:32:31
+tags: ['Java']
+---
+### Automatic Garbage Collection
+#### Simple Describe
+
+Java垃圾回收机制的原文定义:
+
+Automatic garbage collection is the process of looking at   heap memory, identifying which objects are in use and which are not, and deleting the unused objects. An in use object, or a referenced object, means that some part of your program still maintains a pointer to that object. An unused object, or unreferenced object, is no longer referenced by any part of your program. So the memory used by an unreferenced object can be reclaimed.
+
+垃圾自动回收主要是针对内存模型里的 Java堆, 回收有两个步骤，首先区分对象是否在被使用，然后再删除那些没有使用的对象。对象是否在使用，即程序里的其它地方是否有引用这个的对象来区分对象是否在使用或被引用
+
+#### Step1 Marking
+GC中识别对象是否在被使用的步骤，称之为 Marking。 这个过程如果所有对象都需要进行扫描区分，这是个比较耗时的过程。
+
+![Marking](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide3.png)
+
+#### Step2 Normal Deletion
+
+1. Normal Deletion
+   移除所有被步骤一Marking的对象，释放空间。同时，内存分配管理者持有释放后可用的空间块引用，会用于新内存的分配
+
+    ![Deletion1](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide1b.png)
+
+2. Deletion with Compacting  
+    为了提升性能，除了Normal Deletion步骤外，还可以压缩，整理其他剩余的引用对象。把对象移动到一起，这样在给新对象分配内存时会更快。
+
+    ![Deletion2](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide4.png)
+
+__Why Generational Garbage Collection?__  
+如上所述，Marking和Compat操作是能提升性能的。随着分配的对象越来越多，GC执行的时间也会越来越长。按以往的经验来看，应用里的大多数对象存活都是很短暂。如图:
+![example](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/ObjectLifetime.gif)
+
+可以发现，存活的对象越来越少。事实上呢，大多数的对象的生命周期都非常短暂，如图中最左边的Y数值
+
+#### JVM Generations JVM世代
+可以了解到，对象分配的行为会增加JVM的执行效率，因此Heap堆内存可以划分为更小的部分或generations(世代)。Heap堆内存里可以分为: 年轻世代, 老年世代以及永生代。 如图
+
+![structure](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide5.png)
+被创建的新对象会被归类为年轻代，当年轻代满了，就会触发一个minor GC。如果对象的生命周期非常短暂，minor GC 是能够有效提升JVM性能的。在年轻代里，没有引用的对象会被快速的回收掉， 一些存活下来的对象最终会被移到到老年代。
+
+Stop the World Event - 所有的minor GC是"Stop the World"事件，意味着应用里的所有线程会被stopped 直到minor GC完成。因此，如果非常频繁的执行minor GC有可能会造成线程的阻塞，卡顿等现象。  
+
+老年代用来存储生命周期比较长的对象，是年轻代的一个门槛。老年代里的对象，最终也是会回收，称之为 Major GC。 Major GC也是一个 "Stop the World"类型的事件，它检测了所有存活的对象，频繁的执行 Major GC会让JVM变慢。因此，对于快速响应的应用， Major GC应该要控制在最小次数。同时要注意到，在老年代里GC执行的时长是跟使用垃圾回收者的类型有关系的。  
+
+永生代里，JVM要求配置classes和methods的metadata信息。JVM在运行时基于应用里使用的classes生成永生代。此外，JavaSE library 里的类和方法也可能会存储在该世代里。  
+
+如果JVM找到未被加载的Classes，而其他classes需要空间的时候，它们就可能会被回收。__一个Full类型的GC是包括永生代里的回收。__
+[(2) Tuning GC with JVM 5 - Section 3 Generations](http://www.oracle.com/technetwork/java/gc-tuning-5-138395.html)
+
+### The Generational Garbage Collection Process
+既然已经知道了为什么Heap分为不同的区域，那现在来看看不同区域是如何交互的。
+如下图，描述在JVM里对象的分配和世代的划分过程：
+
+1. 所有的新创建对象都是被分配到 eden Space(伊甸园区)。而 survivor spaces(幸存者区)刚开始则是空的.
+   
+    ![Object Allocation](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide13.png)
+
+2. 当Eden区满了就会触发一次Minor GC
+   
+    ![Eden Space](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide14.png)
+
+3. GC时，有引用的对象会被移动到第一个Survior区即S0。当Eden清空时，未被引用的对象会从被删除。
+
+    ![copy Objects](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide6.png)
+
+4. 在下一次Minor GC，相同的操作会在Eden区再次发生，未引用的对象会被删除，有引用的对象会被移动到Survivor区。而在这种情况下, S0中的有引用对象会被移动到第二个Survivor区(S1)。另外，在S0区里, 最后的一次Minor GC会提升S0里面对象的age，移动到S1区。一旦所有的存活的对象被移动到S1去，同时S0以及Eden区会被清。这样，我们在Survivor区里就有不同的age对象。
+   
+   ![Object Aging](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide8.png)
+
+5. 在下一次的Minor GC，重复相同的过程。不同的是，Survivor区会做交换. 存活的对象会被 aged. Eden和S1区会被清理。
+   
+    ![Slide9](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide9.png)
+
+6. Promotion过程. 在Minor Gc后, aged(被划分世代)的对象达到一定的aged门槛时(本例为被aged了8次)它们会从年轻代被提升老年代(养老代)。
+   
+    ![Slide7](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide7.png)
+
+7. 当Minor GC继续触发，对象会提升世代，成为老年代。
+   
+    ![Slide10](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide10.png)
+
+8. 这样就涵盖了年轻代的整个GC过程。最后, 在老年代会触发一次Major GC清理并压缩空间
+   
+    ![Slide11](https://www.oracle.com/webfolder/technetwork/tutorials/obe/java/gc01/images/gcslides/Slide11.png)
+
+
+### Java Garbage Collectors
+#### 常用的Heap配置
+
+| Switch    |    Description                | 
+| ----------| ----------------------------- | 
+| -Xms | JVM启动时，设置Heap的初始大小          |
+| -Xmx | 设置Heap的最大值()                    | 
+| -Xmn | 设置年轻世代的大小                     |
+| -XX:PermSize | 设置启动时永生代的大小          | 
+| -XX:MaxPermSize | 设置永生代的最大值          |
+
+面试题：
+    哪些情况下的对象会被垃圾回收机制处理掉
+
+总结  
+Java 垃圾回收机制最基本的做法是分代回收。内存中的区域被划分成不同的世代，对象根据其存活的时间被保存在对应世代的区域中。  
+一般的实现是划分成3个世代：年轻、年老和永久。内存的分配是发生在年轻世代中的。当一个对象存活时间足够长的时候，它就会被复制到年老世代中。对于不同的世代可以使用不同的垃圾回收算法。进行世代划分的出发点是对应用中对象存活时间进行研究之后得出的统计规律。一般来说，一个应用中的大部分对象的存活时间都很短。比如局部变量的存活时间就只在方法的执行过程中。基于这一点，对于年轻世代的垃圾回收算法就可以很有针对性。
