@@ -1,0 +1,374 @@
+---
+title: TS Hooks应用
+date: '2024-03-02'
+tags: ['react-native']
+draft: false
+summary: 'ts中使用 react hooks'
+---
+
+## Overview
+React Native 项目中，我们推荐在项目中使用 TS + React Hooks，
+
+#### 为什么使用 TS 语法
+现有项目已支持 ts 环境，继续采用 js 的写法不易于维护，也无法享受到 ts 带来的便利，比如类型安全、代码提示和自动补全等，特别对于封装程度较深的组件，辅助性更强；
+
+#### React Hooks 是什么？
+总的来说，React Hooks 是一种让你在函数组件中使用 state 和其他 React 特性的方式，
+1. 它简化了组件的逻辑，提高了代码的可读性和可维护性，并实现了状态逻辑的可抽离；
+2. 避免了 Class 组件中常见的问题，例如 this 指向、生命周期方法的复杂性等。
+3. React Hooks 提供了一些内置钩子函数，常用的包括 useState、useReducer、useLayoutEffect、useEffect、useContext 、useCallback、useMemo、useRef、useImperativeHandle等。
+
+## Hooks
+我们常用的 hooks有，
+* useLayoutEffect
+* useEffect
+* useCallback
+* useMemo
+* useState
+* useReducer
+
+### useState、useReducer
+useState、useReducer 用于在函数组件中添加局部的 state，返回一个数组，第一个值为状态值，第二个值为修改状态值的函数，初始化只会执行一次，
+后续修改需调用函数修改（注：当引用类型时可直接修改内部数据，不会触发render，不推荐使用，一些特殊场景会用到）使用示例：
+
+```typescript
+this.state = {
+    count: 0
+}
+
+this.setState({ count: this.state.count + 1 })
+// useState 使用方式
+const [count, setCount] = useState<number>(0);
+
+useEffect(() => {
+    
+}, [count])
+
+//普通用法。ps: 如果“足够快”的点击，count 值会更新不及时
+// 足够快: 以 60HZ 的刷新频率来说，点击事件间隔需小于 1000 / 60 ≈ 16.7ms
+<TouchableOpacity onPress={()=>setCount(count + 1)}>
+    <Text>增加</Text>
+</TouchableOpacity>
+//函数式方法
+<TouchableOpacity onPress={()=>setCount(prevCount => ++prevCount)}>
+    <Text>增加</Text>
+</TouchableOpacity>
+
+// useReducer 使用方式
+const reducer = (state, action) => {
+  switch (action.type) {
+    case 'increment':
+      return { count: state.count + 1 };
+    case 'decrement':
+      return { count: state.count - 1 };
+    default:
+      return state
+  }
+};
+
+const [count, dispatch] = useReducer(reducer, { count: 0 });
+
+// 修改值
+<View>
+  Count: {state.count}
+  <TouchableOpacity onPress={() => dispatch({ type: 'increment' })}>
+      <Text>增加</Text>
+  </TouchableOpacity>
+  <TouchableOpacity onPress={() => dispatch({ type: 'decrement' })}>
+      <Text>减少</Text>
+  </TouchableOpacity>
+</View>
+```
+
+### useLayoutEffect、useEffect
+useLayoutEffect、useEffect 用于处理副作用逻辑，差别在于前者在浏览器重新绘制屏幕之前触发（同步执行，阻塞浏览器重新绘制），
+后者在浏览器重新绘制屏幕之后触发（异步执行，不阻塞浏览器绘制），当初始化时不想引起绘制结果再次改变时可以使用 useLayoutEffect；
+浏览器渲染过程：
+
+```typescript
+    DOM tree => CSSOM tree => Render tree => Layout (useLayoutEffect) => Paint => 完成
+```
+
+1. 第二个参数为的依赖项，所依赖的数据项发生变化时将会重新触发执行，注意：需要控制数据项的变化和依赖，这个过程最容易造成死循环（既依赖数据项又同时修改它）和缺少依赖 （当缺少依赖时会造成依赖数据停止更新）
+2. return 一个函数会在组件卸载的时候执行；
+
+使用示例：
+```typescript
+const [count, setCount] = useState<number>(0);
+
+// 调用时机
+// 示例1
+useLayoutEffect(() => {
+    console.log('闪烁，不存在的')
+    console.log('这边有deps，有修改就会触发：', count)
+    if (count === 0) { // 限制条件，防止死循环
+      setCount(10 + Math.random() * 200)
+    }
+}, [count]) /* 依赖项 */
+
+// 示例2
+useEffect(() => {
+    console.log('虽然会闪烁，执行速度太快了，有时候不明显，多试试')
+    console.log('这边有deps，有修改就会触发：', count)
+    if (count === 0) { // 限制条件，防止死循环
+      setCount(10 + Math.random() * 200)
+    }
+}, [count]) /* 依赖项 */
+
+// 示例3 
+useEffect(() => {
+    console.log('这边没有deps，只会触发一次：', count)
+    return () => {
+        console.log('要卸载了，该清除一下监听和定时任务了')
+    }
+}, [])
+```
+
+### useContext
+useContext 用于访问 React 的上下文，嵌套组件（N级）跨组件传递数据，使用示例：
+
+```typescript
+// 1、先创建context.ts，并导出
+import { createContext } from 'react'
+
+const Context = createContext<{ count?: number }>({})
+export default Context
+
+// 2、在组件中使用Context Provider
+import Context from './context'
+
+return (
+    <Context.Provider value={{ count: 0, ...props }}>
+        <View>
+        ...
+        </View>
+        <ChildView />
+    </Context.Provider>
+)
+
+// 3、在子组件使用 ChildView.tsx 
+import { useContext } from 'react'
+import context from '../context'
+
+//灵活性高，组件内部皆可使用
+const { count, ...props } = useContext(context)
+
+//或
+
+import Context from './context'
+
+//灵活性低，直接在Context.Consumer包裹内部使用
+<Context.Consumer>
+  {({ count, ...props }) => <Text>Count: {count}</Text>}
+</Context.Consumer>
+```
+
+### useCallback 、useMemo
+useCallback 、useMemo 前者主要用于函数缓存，后者主要用于数据缓存，在大多数情况下，不需要过度使用 useCallback 和 useMemo 进行性能优化，
+只有在确实遇到性能问题时，才需要考虑使用它们，不然反而会降低性能，因为每次都会重新创建函数，只是通过比较deps是否发生变化，从而判断是否返回缓存结果；
+
+    - 场景：比如作为数据项传递给其他组件或者作为副作用 Hook 的依赖项，父组件发生重新渲染时，采用缓存函数在父组件发生重新渲染时能够避免子组件或者副作用函数的重新渲染或执行；
+    - 第二个参数为的依赖项，所依赖的数据项发生变化时将会重新触发执行注意：需要控制数据项的变化和依赖，这个过程最容易造成死循环（即依赖数据项又同时修改它）和缺少依赖 （当缺少依赖时会造成依赖数据无法获取新值）。
+
+#### useCallback 
+useCallback 写法一,
+通过 useEffect 依赖项 count 变量传入，这时候 onChangeValues 不需要做为依赖项，因为函数未使用其他数据项，所需数据项都由外部传入：
+
+```typescript
+const [count, setCount] = useState<number>(0);
+const [randomCount, setRandomCount] = useState<number>(0);
+
+// useCallback 
+const onChangeValues = useCallback((count: number, random: number) => {
+    // 函数主体
+    console.log('result: ', count + random);
+    setRandomCount(count + random)
+}, []) /* 依赖项 */
+
+useEffect(() => {
+    onChangeValues(count, Math.random())
+}, [count]) /* 依赖项 */
+
+// 改变count
+<TouchableOpacity onPress={() => setCount(count + 1)}>
+    <Text>增加</Text>
+</TouchableOpacity>
+
+
+// 死循环欢乐体1
+// useCallback 
+const onChangeValues = useCallback((count: number, random: number) => {
+    // 函数主体
+    console.log('result: ', count + random);
+    setCount(count + random) // 修改钩子函数依赖项，触发死循环
+}, []) /* 依赖项 */
+
+useEffect(() => {
+  onChangeValues(count, Math.random())
+}, [count]) /* 依赖项 */
+```
+useCallback 写法二：
+通过 onChangeValues 依赖项 count 变量传入，这时候 count 不需要做为依赖项，当 count 发生变化时，useCallback 会返回新函数而不是返回缓存函数，从而触发 Effect 函数：
+
+```typescript
+const [count, setCount] = useState<number>(0);
+const [randomCount, setRandomCount] = useState<number>(0);
+
+// useCallback 
+const onChangeValues = useCallback((random: number) => {
+    // 函数主体
+    console.log('result: ', count + random);
+    setRandomCount(count + random)
+}, [count]) /* 依赖项 */
+
+useEffect(() => {
+    onChangeValues(Math.random())
+}, [onChangeValues]) /* 依赖项 */
+
+// 改变count
+<TouchableOpacity onPress={() => setCount(count + 1)}>
+    <Text>增加</Text>
+</TouchableOpacity>
+
+
+// 死循环欢乐体2
+// useCallback 
+const onChangeValues = useCallback((random: number) => {
+    // 函数主体
+    console.log('result: ', count + random);
+    setCount(count + random) // 修改函数依赖项，返回新函数，触发钩子函数，死循环
+}, [count]) /* 依赖项 */
+
+useEffect(() => {
+  onChangeValues(Math.random())
+}, [onChangeValues]) /* 依赖项 */
+```
+###useMemo
+当依赖项发生变化时，返回的数据也会发生变化，否则返回缓存数据：
+
+```typescript
+const [count, setCount] = useState<number>(0);
+
+const data = useMemo(() => { 
+    return [
+    {
+        label: '计数',
+        value: count
+    },
+    {
+        label: '计数 +5',
+        value: count + 5
+    }]
+}, [count]) /* 依赖项 */
+
+useEffect(() => {
+    console.log('data: ', data)
+}, [data])
+
+// 改变count
+<TouchableOpacity onPress={() => setCount(count + 1)}>
+    <Text>增加</Text>
+</TouchableOpacity>
+```
+
+## Examples
+useRef、useImperativeHandle、forwardRef 使用示例,
+
+### useRef 
+#### Usage 1
+useRef 是 React 提供的一个 Hook，它返回一个可变的 ref 对象，其 .current 属性被初始化为传入的参数（initialValue）。
+useRef 返回的 ref 对象在组件的整个生命周期中保持不变，不会因为组件重新渲染而改变，可以在函数组件中存储和访问任意可变值，而不需要触发组件的重新渲染。
+
+```typescript
+// 设置值
+const [count, setCount] = useState(init) // 0
+const timer = useRef<number>(count)
+
+useEffect(() => {
+    setCount(init) // 0 => 1
+}, [init])
+
+useEffect(() => {
+    timer.current = setInterval(() => {
+        console.log('定时任务触发')
+    }, 10000);
+    
+    return () => { // 组件销毁时清除定时任务
+        clearInterval(timer.current)
+    }
+}, [])
+```
+#### Usage 2
+useRef 最常见的用途是获取 DOM 元素的引用。通过将 ref 属性赋值为 useRef 返回的对象，我们可以在函数组件中轻松地访问和操作 DOM 元素。
+此外，useRef 还可以用来存储任意可变值，类似于在类组件中使用实例变量：
+
+```typescript
+// 用于绑定 DOM
+const scrollRef = useRef<ScrollView>(null)
+// 定义动画属性值
+const scrollY = useRef(new Animated.Value(0)).current
+
+<ScrollView 
+    ref={scrollRef}
+    onScroll={Animated.event(
+       [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+       { useNativeDriver: false }
+    )}
+>
+    ...
+    <TouchableOpacity onPress={() => {
+        scrollRef.current?.scrollTo({ animated: true, y: 0 })
+    }}>
+        <Text>返回顶部</Text>
+    </TouchableOpacity>
+</ScrollView>
+```
+
+ScrollView
+```typescript
+(method) ScrollView.scrollTo(y?: number | {
+    x?: number | undefined;
+    y?: number | undefined;
+    animated?: boolean | undefined;
+}, deprecatedX?: number, deprecatedAnimated?: boolean): void
+Scrolls to a given x, y offset, either immediately or with a smooth animation. Syntax:
+
+scrollTo(options: {x: number = 0; y: number = 0; animated: boolean = true})
+
+Note: The weird argument signature is due to the fact that, for historical reasons, the function also accepts separate arguments as an alternative to the options object. This is deprecated due to ambiguity (y before x), and SHOULD NOT BE USED.
+```
+
+```
+### useImperativeHandle
+useImperativeHandle 是一个自定义 Hook，它可以用于在函数组件中自定义暴露给父组件的实例值或方法。可配合 forwardRef 将子组件的数据或者方法绑定到 ref 上，
+forwardRef 是一个高级的 React 特性，它允许组件接收 ref 并将其传递给其子组件，当想要从父组件中直接访问子组件的 DOM 节点或实例时，可采用此方法包裹组件：
+
+```typescript
+const ChildView = forwardRef<RefType, Props>((props, ref) => {
+
+    const [count, setCount] = useState<number>(0)
+    
+    // 在 ref 挂载数据或者方法
+    useImperativeHandle(ref, () => ({
+        getCount: () => count,
+        changeCount: setCount
+        ...
+     }), [count]) /* 依赖项 */
+  
+    return (
+        <ScrollView ref={ref} >
+            {/* 绑定子组件 DOM 节点 */}
+            ...
+        </ScrollView>
+    }
+})
+
+    {/* React.memo() 是一个高阶组件，它可以用于优化函数组件的性能。   
+    当组件的 props 发生变化时，React 会重新渲染该组件，但有时候   
+    组件的输出并不依赖于所有的 props，这时就可以使用 React.memo() 
+    来避免不必要的重新渲染。      */}
+export default React.memo(ChildView)
+```
+参考  
+Thansk to,
+* [kaizhi.zhou]()
